@@ -1,0 +1,20 @@
+[package]
+name = "voicemeter"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.18", features = [ "env-filter" ] }
+eyre = "0.6.9"
+color-eyre = "0.6.2"
+egui = "0.23.0"
+eframe = "0.23.0"
+cpal = "0.15.2"
+
+# [dependencies.cpal]
+# git = "https://github.com/RustAudio/cpal.git"
+# branch = "master"
+# features = [ "asio" ]
