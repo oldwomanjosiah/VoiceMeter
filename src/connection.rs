@@ -12,20 +12,20 @@ use cpal::{ InputCallbackInfo, StreamError};
 
 use eyre::{Context, Result};
 
-pub struct MeteredConnection<S, I, E> {
+pub struct MeteredConnection<S, I> {
     #[allow(unused)]
     stream: S,
     name: Cow<'static, str>,
     config: cpal::StreamConfig,
 
-    recv: Receiver<Result<Vec<I>, E>>,
+    recv: Receiver<Result<Vec<I>, StreamError>>,
     reuse: SyncSender<Vec<I>>,
 
     buffer: VecDeque<I>,
-    errors: Vec<E>,
+    errors: Vec<StreamError>,
 }
 
-impl<S, I, E> MeteredConnection<S, I, E> {
+impl<S, I> MeteredConnection<S, I> {
     pub fn process(&mut self)
     where
         I: Copy,
@@ -47,7 +47,7 @@ impl<S, I, E> MeteredConnection<S, I, E> {
         eprintln!("Got {samples} samples");
     }
 
-    pub fn channels_for_frame(&mut self, frame_time: Duration) -> MeteredRef<'_, S, I, E> {
+    pub fn channels_for_frame(&mut self, frame_time: Duration) -> MeteredRef<'_, S, I> {
         let mut speeding = false;
         let mut samples =
             (frame_time.as_secs_f64() * (self.config.sample_rate.0 as f64)).ceil() as usize;
@@ -78,29 +78,33 @@ impl<S, I, E> MeteredConnection<S, I, E> {
     }
 }
 
-pub struct MeteredRef<'c, S, I, E> {
-    conn: &'c mut MeteredConnection<S, I, E>,
+pub struct MeteredRef<'c, S, I> {
+    conn: &'c mut MeteredConnection<S, I>,
     channels: usize,
     samples: usize,
 }
 
-impl<S, I, E> Drop for MeteredRef<'_, S, I, E> {
+impl<S, I> Drop for MeteredRef<'_, S, I> {
     fn drop(&mut self) {
         self.conn.buffer.drain(0..self.samples.min(self.conn.buffer.len()));
     }
 }
 
-impl<S, I, E> MeteredRef<'_, S, I, E> {
+impl<S, I> MeteredRef<'_, S, I> {
     pub fn channel_iter(&self, channel: usize) -> impl Iterator<Item = &'_ I> {
         assert!(channel < self.channels, "index {channel} out of bounds for {} channels", self.channels);
 
-        self.conn.buffer.iter().take(self.samples).skip(channel).step_by(self.channels)
+        self.conn.buffer
+            .iter()
+            .take(self.samples) // Total number for all channels
+            .skip(channel) // Offset into iter by channel number
+            .step_by(self.channels) // Skip along by the total number of channels, so we only get the data for this channel
     }
 
     pub fn channels(&self) -> usize { self.channels }
 }
 
-impl<S: cpal::traits::StreamTrait, I: AllConvertable + Send> MeteredConnection<S, I, StreamError> {
+impl<S: cpal::traits::StreamTrait, I: AllConvertable + Send> MeteredConnection<S, I> {
     pub fn new<D>(
         device: D,
         repaint: impl FnMut() + Send + 'static,

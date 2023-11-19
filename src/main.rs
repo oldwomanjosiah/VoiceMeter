@@ -5,17 +5,17 @@ use eyre::{Context, Report, Result};
 
 mod connection;
 
-struct App<H, S, I, E> {
+struct App<H, S, I> {
     host: H,
     repaint: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
-    devices: Vec<MeteredConnection<S, I, E>>,
+    devices: Vec<MeteredConnection<S, I>>,
     error_log: Vec<eyre::Report>,
 }
 
 type HostInputStream<H> =
     <<H as cpal::traits::HostTrait>::Device as cpal::traits::DeviceTrait>::Stream;
 
-impl<H: cpal::traits::HostTrait> App<H, HostInputStream<H>, i32, cpal::StreamError> {
+impl<H: cpal::traits::HostTrait> App<H, HostInputStream<H>, i32> {
     fn reload_connections(&mut self) {
         let Some(repaint) = self.repaint.as_ref() else {
             tracing::warn!("could not get repainter");
@@ -52,7 +52,7 @@ impl<H: cpal::traits::HostTrait> App<H, HostInputStream<H>, i32, cpal::StreamErr
     }
 }
 
-impl<H, S, I, E> App<H, S, I, E> {
+impl<H, S, I> App<H, S, I> {
     fn new(host: H) -> Self {
         App {
             host,
@@ -75,7 +75,7 @@ impl<H, S, I, E> App<H, S, I, E> {
     }
 }
 
-impl<H> eframe::App for App<H, HostInputStream<H>, i32, cpal::StreamError>
+impl<H> eframe::App for App<H, HostInputStream<H>, i32>
 where
     H: cpal::traits::HostTrait,
 {
