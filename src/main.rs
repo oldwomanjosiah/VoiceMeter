@@ -1,8 +1,8 @@
-use std::{borrow::Cow, time::Duration, sync::Arc};
+use std::{borrow::Cow, sync::Arc, time::Duration};
 
 use connection::*;
 use cpal::traits::*;
-use eyre::{Context, Report, Result, bail};
+use eyre::{bail, Context, Report, Result};
 
 mod circular_buffer;
 mod connection;
@@ -10,12 +10,13 @@ mod connection;
 struct App<H, S, I, E> {
     host: H,
     repaint: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
-    devices: Vec<Connection<S, I, E>>,
+    devices: Vec<MeteredConnection<S, I, E>>,
     error_log: Vec<eyre::Report>,
     frame: std::time::Instant,
 }
 
-type HostInputStream<H: cpal::traits::HostTrait> = <<H as cpal::traits::HostTrait>::Device as cpal::traits::DeviceTrait>::Stream;
+type HostInputStream<H> =
+    <<H as cpal::traits::HostTrait>::Device as cpal::traits::DeviceTrait>::Stream;
 
 impl<H: cpal::traits::HostTrait> App<H, HostInputStream<H>, i32, cpal::StreamError> {
     fn reload_connections(&mut self) {
@@ -28,7 +29,8 @@ impl<H: cpal::traits::HostTrait> App<H, HostInputStream<H>, i32, cpal::StreamErr
             Ok(devices) => devices,
             Err(e) => {
                 tracing::warn!("could not get devices");
-                self.error_log.push(Report::new(e).wrap_err("Getting new device list"));
+                self.error_log
+                    .push(Report::new(e).wrap_err("Getting new device list"));
                 return;
             }
         };
@@ -41,20 +43,19 @@ impl<H: cpal::traits::HostTrait> App<H, HostInputStream<H>, i32, cpal::StreamErr
                 move || parent()
             };
 
-            match connection::start_stream(device, Duration::from_secs(2), repaint) {
+            match connection::MeteredConnection::new(device, repaint) {
                 Ok(conn) => {
                     self.devices.push(conn);
-                },
+                }
                 Err(e) => {
                     self.error_log.push(e.wrap_err("setting up connection"));
                 }
             };
-
         }
     }
 }
 
-impl <H, S, I, E> App<H, S, I, E> {
+impl<H, S, I, E> App<H, S, I, E> {
     fn new(host: H) -> Self {
         App {
             host,
@@ -78,14 +79,12 @@ impl <H, S, I, E> App<H, S, I, E> {
     }
 }
 
-impl<H> eframe::App for App<H, HostInputStream<H>, i32, cpal::StreamError> where H: cpal::traits::HostTrait {
-
+impl<H> eframe::App for App<H, HostInputStream<H>, i32, cpal::StreamError>
+where
+    H: cpal::traits::HostTrait,
+{
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let elapsed = self.frame.elapsed();
-        self.frame = std::time::Instant::now();
-
-        // eprintln!("Frametime: {}ms {}s", elapsed.as_millis(), elapsed.as_secs_f32());
-        // eprintln!("Hz: {}", std::time::Duration::from_secs(1).as_nanos() / elapsed.as_nanos());
+        let frametime = Duration::from_secs_f32(ctx.input(|it| it.unstable_dt));
 
         if self.set_repaint_from(ctx) {
             self.reload_connections();
@@ -98,24 +97,34 @@ impl<H> eframe::App for App<H, HostInputStream<H>, i32, cpal::StreamError> where
                 self.reload_connections();
             }
 
+            self.devices.retain_mut(|connection| {
+                let mut keep = true;
 
-            for connection in &mut self.devices {
+                println!("Name: {}", connection.name());
                 connection.process();
 
                 ui.separator();
 
                 ui.heading(connection.name());
 
-                let last_256 = connection.buffer().iter().last(32).fold(0, |acc, it| acc.max(it.saturating_abs()));
-                let all = connection.buffer().iter().fold(0, |acc, it| acc.max(it.saturating_abs()));
+                let max = connection
+                    .take_duration_samples(frametime)
+                    .fold(0, |acc, it| acc.max(it.saturating_abs()));
+                let max_frac = max as f32 / i32::MAX as f32;
 
+                ui.add(egui::ProgressBar::new(max_frac).text("current"));
 
-                let last_256_frac = last_256 as f32 / i32::MAX as f32;
-                let all_frac = all as f32 / i32::MAX as f32;
+                ui.label(format!(
+                    "Buffered: {}ms",
+                    connection.buffered_time().as_millis()
+                ));
 
-                ui.add(egui::ProgressBar::new(last_256_frac).text("current"));
-                ui.add(egui::ProgressBar::new(all_frac).text("max"));
-            }
+                if ui.button("remove").clicked() {
+                    keep = false;
+                }
+
+                keep
+            });
         });
     }
 }
@@ -139,10 +148,19 @@ fn main() -> Result<()> {
         ..Default::default()
     };
 
-    eframe::run_native("VoiceMeter", options, Box::new(|_| {
-        let app = App::new(cpal::host_from_id(cpal::HostId::Wasapi).wrap_err("getting host to initalize").unwrap());
-        Box::new(app)
-    })).unwrap();
+    eframe::run_native(
+        "VoiceMeter",
+        options,
+        Box::new(|_| {
+            let app = App::new(
+                cpal::host_from_id(cpal::HostId::Wasapi)
+                    .wrap_err("getting host to initalize")
+                    .unwrap(),
+            );
+            Box::new(app)
+        }),
+    )
+    .unwrap();
 
     Ok(())
 }

@@ -1,5 +1,6 @@
 use std::{
     borrow::Cow,
+    collections::VecDeque,
     sync::{
         mpsc::{Receiver, Sender, SyncSender},
         Arc,
@@ -8,7 +9,8 @@ use std::{
 };
 
 use crate::circular_buffer::CircularBuffer;
-use cpal::{InputCallbackInfo, traits::StreamTrait};
+use cpal::{traits::StreamTrait, BuildStreamError, InputCallbackInfo, StreamError};
+use eframe::glow::BUFFER_STORAGE_FLAGS;
 use eyre::{Context, Result};
 
 pub struct Connection<S, I, E> {
@@ -20,6 +22,18 @@ pub struct Connection<S, I, E> {
     buffer: CircularBuffer<I>,
     errors: Vec<E>,
     duration: Duration,
+}
+
+pub struct MeteredConnection<S, I, E> {
+    stream: S,
+    name: Cow<'static, str>,
+    config: cpal::StreamConfig,
+
+    recv: Receiver<Result<Vec<I>, E>>,
+    reuse: SyncSender<Vec<I>>,
+
+    buffer: VecDeque<I>,
+    errors: Vec<E>,
 }
 
 impl<S, I, E> Connection<S, I, E> {
@@ -59,6 +73,218 @@ impl<S, I, E> Connection<S, I, E> {
     }
 }
 
+impl<S, I, E> MeteredConnection<S, I, E> {
+    pub fn process(&mut self)
+    where
+        I: Copy,
+    {
+        let mut samples = 0;
+        while let Some(next) = self.recv.try_recv().ok() {
+            match next {
+                Ok(mut buffer) => {
+                    self.buffer.extend(buffer.iter().copied());
+                    samples += buffer.len();
+                    buffer.clear();
+                    self.reuse.try_send(buffer).ok();
+                }
+
+                Err(e) => self.errors.push(e),
+            }
+        }
+
+        eprintln!("Got {samples} samples");
+    }
+
+    pub fn take_duration_samples(&mut self, duration: Duration) -> impl Iterator<Item = I> + '_ {
+        let mut speeding = false;
+        let mut sample_count =
+            (duration.as_secs_f64() * (self.config.sample_rate.0 as f64)).ceil() as usize * self.config.channels as usize;
+
+        if self.buffered_time() > Duration::from_millis(500) {
+            speeding = true;
+            sample_count = sample_count * 3 / 2;
+        }
+
+        eprintln!("Taking {sample_count} samples for frametime {}ms (speeding: {speeding:?})", duration.as_millis());
+
+        self.buffer
+            .drain(0..sample_count.min(self.buffer.len()))
+            .step_by(self.config.channels as _)
+    }
+
+    pub fn buffered_time(&self) -> Duration {
+        let samples = self.buffer.len() as _;
+        let channels = self.config.channels as _;
+        let rate = self.config.sample_rate.0 as _;
+
+        Duration::from_secs(1) * samples / channels / rate
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+impl<S: cpal::traits::StreamTrait, I: AllConvertable + Send> MeteredConnection<S, I, StreamError> {
+    pub fn new<D>(
+        device: D,
+        repaint: impl FnMut() + Send + 'static,
+    ) -> Result<Self>
+    where
+        D: cpal::traits::DeviceTrait<Stream = S>,
+    {
+        let name = device
+            .name()
+            .map(Cow::Owned)
+            .unwrap_or(Cow::Borrowed("<unknown>"));
+
+        let supported_config = device
+            .default_input_config()
+            .wrap_err("getting default config")?;
+        let config = supported_config.config();
+        let config = cpal::StreamConfig {
+            buffer_size: cpal::BufferSize::Fixed(128),
+            ..config
+        };
+
+        let (tx, recv) = std::sync::mpsc::channel();
+        let (reuse, get_reused) = std::sync::mpsc::sync_channel(32);
+
+        let span = Arc::new(
+            tracing::info_span!("Input Stream Worker", %name, ty = ?supported_config.sample_format()),
+        );
+
+        let stream = connect_sending(
+            &device,
+            &supported_config,
+            &config,
+            Some(span),
+            tx,
+            get_reused,
+            repaint,
+        )?;
+
+        stream.play().wrap_err("starting stream")?;
+
+        let conn = MeteredConnection {
+            stream,
+            name,
+            config,
+            recv,
+            reuse,
+            buffer: VecDeque::new(),
+            errors: Vec::new(),
+        };
+
+        Ok(conn)
+    }
+}
+
+macro_rules! def_all_convert {
+    ($($ty:ty),+ $(,)?) => {
+        pub trait AllConvertable:
+            $(::cpal::FromSample<$ty> +)* std::any::Any {}
+
+        $(impl AllConvertable for $ty {})*
+    };
+}
+
+def_all_convert![f32, f64, i8, i16, i32, i64, u8, u16, u32, u64];
+
+/// Connect to device with a given configuration, converting whatever sample format it supports into a common sample format of your choice.
+fn connect_sending<
+    S: AllConvertable + Send,
+    Sp: AsRef<tracing::Span> + Clone + Send + 'static,
+    D: cpal::traits::DeviceTrait,
+>(
+    device: &D,
+    supported_config: &cpal::SupportedStreamConfig,
+    config: &cpal::StreamConfig,
+    span: Option<Sp>,
+    sender: Sender<Result<Vec<S>, cpal::StreamError>>,
+    reuse: Receiver<Vec<S>>,
+    repaint: impl FnMut() + Send + 'static,
+) -> Result<D::Stream, cpal::BuildStreamError> {
+    let err_fn = send_err(span.clone(), sender.clone());
+
+    match supported_config.sample_format() {
+        cpal::SampleFormat::I8 => device.build_input_stream::<i8, _, _>(
+            &config,
+            call_with_each(sample_function(span, sender, reuse), repaint),
+            err_fn,
+            None,
+        ),
+
+        cpal::SampleFormat::I16 => device.build_input_stream::<i16, _, _>(
+            &config,
+            call_with_each(sample_function(span, sender, reuse), repaint),
+            err_fn,
+            None,
+        ),
+
+        cpal::SampleFormat::I32 => device.build_input_stream::<i32, _, _>(
+            &config,
+            call_with_each(sample_function(span, sender, reuse), repaint),
+            err_fn,
+            None,
+        ),
+
+        cpal::SampleFormat::I64 => device.build_input_stream::<i64, _, _>(
+            &config,
+            call_with_each(sample_function(span, sender, reuse), repaint),
+            err_fn,
+            None,
+        ),
+
+        cpal::SampleFormat::U8 => device.build_input_stream::<u8, _, _>(
+            &config,
+            call_with_each(sample_function(span, sender, reuse), repaint),
+            err_fn,
+            None,
+        ),
+
+        cpal::SampleFormat::U16 => device.build_input_stream::<u16, _, _>(
+            &config,
+            call_with_each(sample_function(span, sender, reuse), repaint),
+            err_fn,
+            None,
+        ),
+
+        cpal::SampleFormat::U32 => device.build_input_stream::<u32, _, _>(
+            &config,
+            call_with_each(sample_function(span, sender, reuse), repaint),
+            err_fn,
+            None,
+        ),
+
+        cpal::SampleFormat::U64 => device.build_input_stream::<u64, _, _>(
+            &config,
+            call_with_each(sample_function(span, sender, reuse), repaint),
+            err_fn,
+            None,
+        ),
+
+        cpal::SampleFormat::F32 => device.build_input_stream::<f32, _, _>(
+            &config,
+            call_with_each(sample_function(span, sender, reuse), repaint),
+            err_fn,
+            None,
+        ),
+
+        cpal::SampleFormat::F64 => device.build_input_stream::<f64, _, _>(
+            &config,
+            call_with_each(sample_function(span, sender, reuse), repaint),
+            err_fn,
+            None,
+        ),
+
+        it => {
+            tracing::warn!("Stream format {it:?} is not known");
+            Err(cpal::BuildStreamError::StreamConfigNotSupported)
+        }
+    }
+}
+
 pub fn start_stream<D: cpal::traits::DeviceTrait>(
     device: D,
     duration: Duration,
@@ -87,87 +313,16 @@ pub fn start_stream<D: cpal::traits::DeviceTrait>(
     let span = Arc::new(
         tracing::info_span!("Input Stream Worker", %name, ty = ?supported_config.sample_format()),
     );
-    let err_fn = send_err(Some(span.clone()), tx.clone());
 
-    let stream = match supported_config.sample_format() {
-        cpal::SampleFormat::I8 => device.build_input_stream::<i8, _, _>(
-            &config,
-            call_with_each(sample_function(Some(span), tx, get_reused), repaint),
-            err_fn,
-            None,
-        ),
-
-        cpal::SampleFormat::I16 => device.build_input_stream::<i16, _, _>(
-            &config,
-            call_with_each(sample_function(Some(span), tx, get_reused), repaint),
-            err_fn,
-            None,
-        ),
-
-        cpal::SampleFormat::I32 => device.build_input_stream::<i32, _, _>(
-            &config,
-            call_with_each(sample_function(Some(span), tx, get_reused), repaint),
-            err_fn,
-            None,
-        ),
-
-        cpal::SampleFormat::I64 => device.build_input_stream::<i64, _, _>(
-            &config,
-            call_with_each(sample_function(Some(span), tx, get_reused), repaint),
-            err_fn,
-            None,
-        ),
-
-        cpal::SampleFormat::U8 => device.build_input_stream::<u8, _, _>(
-            &config,
-            call_with_each(sample_function(Some(span), tx, get_reused), repaint),
-            err_fn,
-            None,
-        ),
-
-        cpal::SampleFormat::U16 => device.build_input_stream::<u16, _, _>(
-            &config,
-            call_with_each(sample_function(Some(span), tx, get_reused), repaint),
-            err_fn,
-            None,
-        ),
-
-        cpal::SampleFormat::U32 => device.build_input_stream::<u32, _, _>(
-            &config,
-            call_with_each(sample_function(Some(span), tx, get_reused), repaint),
-            err_fn,
-            None,
-        ),
-
-        cpal::SampleFormat::U64 => device.build_input_stream::<u64, _, _>(
-            &config,
-            call_with_each(sample_function(Some(span), tx, get_reused), repaint),
-            err_fn,
-            None,
-        ),
-
-        cpal::SampleFormat::F32 => device.build_input_stream::<f32, _, _>(
-            &config,
-            call_with_each(sample_function(Some(span), tx, get_reused), repaint),
-            err_fn,
-            None,
-        ),
-
-        cpal::SampleFormat::F64 => device.build_input_stream::<f64, _, _>(
-            &config,
-            call_with_each(sample_function(Some(span), tx, get_reused), repaint),
-            err_fn,
-            None,
-        ),
-
-        it => eyre::bail!("Unknown Format! {it:?}"),
-    }
-    .wrap_err_with(|| {
-        format!(
-            "building stream for sample type {:?}",
-            supported_config.sample_format()
-        )
-    })?;
+    let stream = connect_sending(
+        &device,
+        &supported_config,
+        &config,
+        Some(span),
+        tx,
+        get_reused,
+        repaint,
+    )?;
 
     stream.play().wrap_err("starting stream")?;
 
