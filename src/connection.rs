@@ -98,18 +98,38 @@ impl<S, I, E> MeteredConnection<S, I, E> {
     pub fn take_duration_samples(&mut self, duration: Duration) -> impl Iterator<Item = I> + '_ {
         let mut speeding = false;
         let mut sample_count =
-            (duration.as_secs_f64() * (self.config.sample_rate.0 as f64)).ceil() as usize * self.config.channels as usize;
+            (duration.as_secs_f64() * (self.config.sample_rate.0 as f64)).ceil() as usize;
 
         if self.buffered_time() > Duration::from_millis(500) {
             speeding = true;
             sample_count = sample_count * 3 / 2;
         }
 
+        sample_count *= self.config.channels as usize;
+
         eprintln!("Taking {sample_count} samples for frametime {}ms (speeding: {speeding:?})", duration.as_millis());
 
         self.buffer
             .drain(0..sample_count.min(self.buffer.len()))
-            .step_by(self.config.channels as _)
+            // .step_by(self.config.channels as _)
+    }
+
+    pub fn channels_for_frame(&mut self, frame_time: Duration) -> MeteredRef<'_, S, I, E> {
+        let mut speeding = false;
+        let mut samples =
+            (frame_time.as_secs_f64() * (self.config.sample_rate.0 as f64)).ceil() as usize;
+
+        if self.buffered_time() > Duration::from_millis(500) {
+            speeding = true;
+            samples = samples * 3 / 2;
+        }
+
+        let channels = self.config.channels as usize;
+        samples *= channels;
+
+        eprintln!("Taking {samples} samples for frametime {}ms (speeding: {speeding:?})", frame_time.as_millis());
+
+        MeteredRef { conn: self, channels, samples }
     }
 
     pub fn buffered_time(&self) -> Duration {
@@ -123,6 +143,28 @@ impl<S, I, E> MeteredConnection<S, I, E> {
     pub fn name(&self) -> &str {
         &self.name
     }
+}
+
+pub struct MeteredRef<'c, S, I, E> {
+    conn: &'c mut MeteredConnection<S, I, E>,
+    channels: usize,
+    samples: usize,
+}
+
+impl<S, I, E> Drop for MeteredRef<'_, S, I, E> {
+    fn drop(&mut self) {
+        self.conn.buffer.drain(0..self.samples.min(self.conn.buffer.len()));
+    }
+}
+
+impl<S, I, E> MeteredRef<'_, S, I, E> {
+    pub fn channel_iter(&self, channel: usize) -> impl Iterator<Item = &'_ I> {
+        assert!(channel < self.channels, "index {channel} out of bounds for {} channels", self.channels);
+
+        self.conn.buffer.iter().take(self.samples).skip(channel).step_by(self.channels)
+    }
+
+    pub fn channels(&self) -> usize { self.channels }
 }
 
 impl<S: cpal::traits::StreamTrait, I: AllConvertable + Send> MeteredConnection<S, I, StreamError> {

@@ -107,12 +107,16 @@ where
 
                 ui.heading(connection.name());
 
-                let max = connection
-                    .take_duration_samples(frametime)
-                    .fold(0, |acc, it| acc.max(it.saturating_abs()));
-                let max_frac = max as f32 / i32::MAX as f32;
+                let channels = connection.channels_for_frame(frametime);
 
-                ui.add(egui::ProgressBar::new(max_frac).text("current"));
+                for i in 0..channels.channels() {
+                    let channel_max = channels.channel_iter(i).fold(0, |acc, it| acc.max(it.saturating_abs()));
+                    let max_frac = channel_max as f32 / i32::MAX as f32;
+
+                    ui.add(egui::ProgressBar::new(max_frac).text(format!("Channel: {}", i + 1)));
+                }
+
+                drop(channels);
 
                 ui.label(format!(
                     "Buffered: {}ms",
