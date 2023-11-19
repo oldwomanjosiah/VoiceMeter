@@ -9,8 +9,8 @@ use std::{
 };
 
 use crate::circular_buffer::CircularBuffer;
-use cpal::{traits::StreamTrait, BuildStreamError, InputCallbackInfo, StreamError};
-use eframe::glow::BUFFER_STORAGE_FLAGS;
+use cpal::{traits::StreamTrait, InputCallbackInfo, StreamError};
+
 use eyre::{Context, Result};
 
 pub struct Connection<S, I, E> {
@@ -50,7 +50,7 @@ impl<S, I, E> Connection<S, I, E> {
                     println!("Buflen: {}", buf.len());
                     self.buffer.extend_from(&buf);
                     buf.clear();
-                    if let Err(_) = self.reuse.try_send(buf) {
+                    if self.reuse.try_send(buf).is_err() {
                         tracing::warn!(name = %self.name, "Could not send buffer for re-use, dropping");
                     }
                 }
@@ -79,7 +79,7 @@ impl<S, I, E> MeteredConnection<S, I, E> {
         I: Copy,
     {
         let mut samples = 0;
-        while let Some(next) = self.recv.try_recv().ok() {
+        while let Ok(next) = self.recv.try_recv() {
             match next {
                 Ok(mut buffer) => {
                     self.buffer.extend(buffer.iter().copied());
@@ -251,70 +251,70 @@ fn connect_sending<
 
     match supported_config.sample_format() {
         cpal::SampleFormat::I8 => device.build_input_stream::<i8, _, _>(
-            &config,
+            config,
             call_with_each(sample_function(span, sender, reuse), repaint),
             err_fn,
             None,
         ),
 
         cpal::SampleFormat::I16 => device.build_input_stream::<i16, _, _>(
-            &config,
+            config,
             call_with_each(sample_function(span, sender, reuse), repaint),
             err_fn,
             None,
         ),
 
         cpal::SampleFormat::I32 => device.build_input_stream::<i32, _, _>(
-            &config,
+            config,
             call_with_each(sample_function(span, sender, reuse), repaint),
             err_fn,
             None,
         ),
 
         cpal::SampleFormat::I64 => device.build_input_stream::<i64, _, _>(
-            &config,
+            config,
             call_with_each(sample_function(span, sender, reuse), repaint),
             err_fn,
             None,
         ),
 
         cpal::SampleFormat::U8 => device.build_input_stream::<u8, _, _>(
-            &config,
+            config,
             call_with_each(sample_function(span, sender, reuse), repaint),
             err_fn,
             None,
         ),
 
         cpal::SampleFormat::U16 => device.build_input_stream::<u16, _, _>(
-            &config,
+            config,
             call_with_each(sample_function(span, sender, reuse), repaint),
             err_fn,
             None,
         ),
 
         cpal::SampleFormat::U32 => device.build_input_stream::<u32, _, _>(
-            &config,
+            config,
             call_with_each(sample_function(span, sender, reuse), repaint),
             err_fn,
             None,
         ),
 
         cpal::SampleFormat::U64 => device.build_input_stream::<u64, _, _>(
-            &config,
+            config,
             call_with_each(sample_function(span, sender, reuse), repaint),
             err_fn,
             None,
         ),
 
         cpal::SampleFormat::F32 => device.build_input_stream::<f32, _, _>(
-            &config,
+            config,
             call_with_each(sample_function(span, sender, reuse), repaint),
             err_fn,
             None,
         ),
 
         cpal::SampleFormat::F64 => device.build_input_stream::<f64, _, _>(
-            &config,
+            config,
             call_with_each(sample_function(span, sender, reuse), repaint),
             err_fn,
             None,
@@ -459,7 +459,7 @@ pub fn f32s(data: &[f32], _cfg: &InputCallbackInfo) {
 
 pub fn i8s(data: &[f32], _cfg: &InputCallbackInfo) {
     let i8s: Vec<_> = data
-        .into_iter()
+        .iter()
         .map(|it| (it * i8::MAX as f32) as i8)
         .collect();
     let min = i8s.iter().copied().min().unwrap_or_default();

@@ -1,8 +1,8 @@
-use std::{borrow::Cow, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use connection::*;
 use cpal::traits::*;
-use eyre::{bail, Context, Report, Result};
+use eyre::{Context, Report, Result};
 
 mod circular_buffer;
 mod connection;
