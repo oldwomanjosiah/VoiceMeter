@@ -1,10 +1,8 @@
 use std::{sync::Arc, time::Duration};
 
 use connection::*;
-use cpal::traits::*;
 use eyre::{Context, Report, Result};
 
-mod circular_buffer;
 mod connection;
 
 struct App<H, S, I, E> {
@@ -12,7 +10,6 @@ struct App<H, S, I, E> {
     repaint: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     devices: Vec<MeteredConnection<S, I, E>>,
     error_log: Vec<eyre::Report>,
-    frame: std::time::Instant,
 }
 
 type HostInputStream<H> =
@@ -62,7 +59,6 @@ impl<H, S, I, E> App<H, S, I, E> {
             repaint: None,
             devices: Default::default(),
             error_log: Default::default(),
-            frame: std::time::Instant::now(),
         }
     }
 
@@ -168,77 +164,3 @@ fn main() -> Result<()> {
 
     Ok(())
 }
-
-// fn main() -> Result<()> {
-//     {
-//         use tracing_subscriber::prelude::*;
-//         tracing_subscriber::registry()
-//             .with(
-//                 tracing_subscriber::fmt::layer()
-//                     .with_timer(tracing_subscriber::fmt::time::uptime())
-//                     .with_filter(tracing_subscriber::EnvFilter::from_default_env()),
-//             )
-//             .init();
-
-//         color_eyre::install()?;
-//     }
-
-//     println!("Hello, world!");
-
-//     let host = cpal::host_from_id(cpal::HostId::Wasapi).wrap_err("Getting Audio Host")?;
-
-//     for input in host.input_devices().wrap_err("getting inputs")? {
-//         let name = input
-//             .name()
-//             .map(Cow::Owned)
-//             .unwrap_or(Cow::Borrowed("<unknown>"));
-//         println!("- {}", name);
-
-//         if name.contains("Scarlett") {
-//             println!("Starting stream!");
-//             for config in input
-//                 .supported_input_configs()
-//                 .wrap_err("couldn't get supported configurations")?
-//             {
-//                 println!("Supported config: {config:#?}");
-//             }
-
-//             let supported_config = input
-//                 .default_input_config()
-//                 .wrap_err("getting input config")?;
-
-//             let config = {
-//                 let buffer_size = match supported_config.buffer_size() {
-//                     &cpal::SupportedBufferSize::Range { min, max: _ } => {
-//                         cpal::BufferSize::Fixed(buffer_size_from_min(min))
-//                     }
-//                     cpal::SupportedBufferSize::Unknown => cpal::BufferSize::Default,
-//                 };
-
-//                 cpal::StreamConfig {
-//                     channels: supported_config.channels(),
-//                     sample_rate: supported_config.sample_rate(),
-//                     buffer_size,
-//                 }
-//             };
-
-//             eprintln!("{config:#?}");
-
-//             let stream = input
-//                 .build_input_stream(&config, i8s, log_err, None)
-//                 .wrap_err("building input stream")?;
-
-//             stream.play().wrap_err("starting stream")?;
-
-//             let mut buf = String::new();
-//             std::io::stdin()
-//                 .read_line(&mut buf)
-//                 .wrap_err("getting user input")?;
-
-//             stream.pause().wrap_err("pausing stream")?;
-//             drop(stream);
-//         }
-//     }
-
-//     Ok(())
-// }
