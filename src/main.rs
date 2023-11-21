@@ -1,11 +1,12 @@
 use std::{sync::Arc, time::Duration};
 
 use connection::*;
+use cpal::traits::StreamTrait;
 use eyre::{Context, Report, Result};
 
 mod connection;
 
-struct ChannelAnalysis<S> {
+struct ChannelAnalysis<S: StreamTrait> {
     pub connection: ChannelConnection<S, i32>,
     pub buffer_duration: Duration,
     pub smooth_duration: Duration,
@@ -19,7 +20,7 @@ struct BarInfo {
     decaying: f32
 }
 
-impl<S> ChannelAnalysis<S> {
+impl<S: StreamTrait> ChannelAnalysis<S> {
     pub fn new(mut connection: ChannelConnection<S, i32>) -> Self {
         let max_decay = std::iter::repeat(0).take(connection.channels().len()).collect();
         Self { connection, buffer_duration: Duration::from_secs(3), smooth_duration: Duration::from_millis(50), decay_rate: 0.4, max_decay  }
@@ -67,7 +68,7 @@ impl<S> ChannelAnalysis<S> {
     }
 }
 
-struct App<H, S> {
+struct App<H, S: StreamTrait> {
     host: H,
     repaint: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     devices: Vec<ChannelAnalysis<S>>,
@@ -187,7 +188,7 @@ impl egui::Widget for BarInfoWidget {
     }
 }
 
-impl<H, S> App<H, S> {
+impl<H, S: StreamTrait> App<H, S> {
     fn new(host: H) -> Self {
         App {
             host,
@@ -236,24 +237,7 @@ where
 
                     ui.horizontal(|ui| {
                         connection.with_bar_info(frametime, |idx, info| {
-                            // ui.add(
-                            //     egui::ProgressBar::new(info.jagged)
-                            //         .text(format!("Channel {}", idx + 1)),
-                            // );
-                            // ui.add(egui::ProgressBar::new(info.smooth));
-                            // ui.add(egui::ProgressBar::new(info.decaying));
-
                             ui.add(BarInfoWidget::new(info, format!("{idx}")));
-
-                            // ui.label(format!(
-                            //     "Buffered: back {}ms {}samples / forward {}ms {}samples",
-                            //     channel.backbuffer_duration().as_millis(),
-                            //     channel.backbuffer_len(),
-                            //     channel.buffer_duration().as_millis(),
-                            //     channel.buffer_len()
-                            // ));
-
-                            // ui.add_space(24.0);
                         });
                     });
                 }

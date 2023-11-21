@@ -337,8 +337,7 @@ where
     }
 }
 
-pub struct ChannelConnection<S, I> {
-    #[allow(unused)]
+pub struct ChannelConnection<S: StreamTrait, I> {
     stream: S,
 
     name: Cow<'static, str>,
@@ -348,7 +347,7 @@ pub struct ChannelConnection<S, I> {
     buffers: Vec<buffer::SampleBuffer<I>>,
 }
 
-impl<S, I> ChannelConnection<S, I>
+impl<S: StreamTrait, I> ChannelConnection<S, I>
 where
     I: AllConvertable + Send + Sync + 'static,
 {
@@ -420,7 +419,7 @@ where
     }
 }
 
-impl<S, I: Clone> ChannelConnection<S, I> {
+impl<S: StreamTrait, I: Clone> ChannelConnection<S, I> {
     pub fn process(&mut self) {
         while let Ok(mut rx_ref) = self.ingest.try_recv_ref() {
             for (idx, data) in rx_ref.channels.iter_mut().enumerate() {
@@ -430,7 +429,7 @@ impl<S, I: Clone> ChannelConnection<S, I> {
     }
 }
 
-impl<S: cpal::traits::StreamTrait, I> ChannelConnection<S, I> {
+impl<S: StreamTrait, I> ChannelConnection<S, I> {
     pub fn play(&mut self) -> Result<()> {
         self.stream.play()?;
         Ok(())
@@ -440,9 +439,7 @@ impl<S: cpal::traits::StreamTrait, I> ChannelConnection<S, I> {
         self.stream.pause()?;
         Ok(())
     }
-}
 
-impl<S, I> ChannelConnection<S, I> {
     pub fn trim_backbuffers_duration(&mut self, duration: Duration) {
         for buffer in &mut self.buffers {
             buffer.trim_backbuffer_duration(duration);
@@ -454,6 +451,14 @@ impl<S, I> ChannelConnection<S, I> {
     }
 
     pub fn name(&self) -> &str { self.name.as_ref() }
+}
+
+impl<S: StreamTrait, I> Drop for ChannelConnection<S, I> {
+    fn drop(&mut self) {
+        if let Err(e) = self.pause() {
+            tracing::warn!("Failed to pause stream while dropping: {e}");
+        }
+    }
 }
 
 macro_rules! def_all_convert {
