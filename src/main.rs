@@ -128,6 +128,9 @@ struct HorizontalBarWidget {
     info: BarInfo,
     label: Option<egui::WidgetText>,
 
+    warn: (f32, egui::Color32),
+    error: (f32, egui::Color32),
+
     height: f32,
     desired_width: Option<f32>,
 }
@@ -137,6 +140,10 @@ impl HorizontalBarWidget {
         Self {
             info,
             label: None,
+
+            warn: (0.75, egui::Color32::YELLOW),
+            error: (0.95, egui::Color32::RED),
+
             height: 32.0,
             desired_width: None,
         }
@@ -159,10 +166,17 @@ impl HorizontalBarWidget {
             ..self
         }
     }
+
+    fn select_color(&self, progress: f32, default: egui::Color32) -> egui::Color32 {
+        if progress > self.error.0 { self.error.1 } else if progress > self.warn.0 { self.warn.1 } else { default }
+    }
 }
 
 impl egui::Widget for HorizontalBarWidget {
     fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+        let fill = self.select_color(self.info.smooth, ui.style().visuals.selection.bg_fill);
+        let decay_color = self.select_color(self.info.decaying, fill);
+
         let max_text_with = self
             .desired_width
             .unwrap_or(ui.available_size_before_wrap().x)
@@ -182,7 +196,6 @@ impl egui::Widget for HorizontalBarWidget {
         {
             let painter = ui.painter().with_clip_rect(rect);
             let bg = ui.style().visuals.faint_bg_color;
-            let fill = ui.style().visuals.selection.bg_fill;
 
             // Background
             painter.rect_filled(rect, 0.0, bg);
@@ -207,7 +220,7 @@ impl egui::Widget for HorizontalBarWidget {
             let (decay_rect, _) = rect.split_left_right_at_fraction(self.info.decaying);
             painter.line_segment(
                 [decay_rect.right_top(), decay_rect.right_bottom()],
-                (2.0, fill),
+                (2.0, decay_color),
             );
         }
 
@@ -222,109 +235,6 @@ impl egui::Widget for HorizontalBarWidget {
                 ui.visuals().noninteractive(),
             );
         }
-
-        response
-    }
-}
-
-struct BarInfoWidget {
-    info: BarInfo,
-    name: egui::WidgetText,
-
-    bar_width: f32,
-    max_bar_height: Option<f32>,
-}
-
-impl BarInfoWidget {
-    pub fn new(info: BarInfo, name: impl Into<egui::WidgetText>) -> Self {
-        BarInfoWidget {
-            info,
-            name: name.into(),
-            bar_width: 32.0,
-            max_bar_height: None,
-        }
-    }
-
-    pub fn with_height(self, height: f32) -> Self {
-        Self {
-            max_bar_height: Some(height),
-            ..self
-        }
-    }
-}
-
-impl egui::Widget for BarInfoWidget {
-    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
-        fn draw_info_in(
-            rect: egui::Rect,
-            painter: &egui::Painter,
-            info: BarInfo,
-            box_fill: egui::Color32,
-            bar_fill: egui::Color32,
-        ) {
-            painter.rect_filled(rect, 0.0, box_fill);
-            painter.rect_filled(rect, 0.0, box_fill);
-
-            let (_, jagged) = rect.split_top_bottom_at_fraction(1.0 - info.jagged);
-            let (_, smoothed) = rect.split_top_bottom_at_fraction(1.0 - info.smooth);
-            let (_, decay) = rect.split_top_bottom_at_fraction(1.0 - info.decaying);
-
-            painter.rect_filled(smoothed, 0.0, bar_fill);
-            painter.line_segment([decay.left_top(), decay.right_top()], (2.0, bar_fill));
-            painter.line_segment(
-                [jagged.left_top(), jagged.right_top()],
-                (2.0, egui::Color32::RED),
-            );
-        }
-
-        let spacing = ui.spacing().item_spacing.y;
-        let widget_text = self.name.into_galley(
-            ui,
-            Some(false),
-            ui.available_width(),
-            egui::TextStyle::Button,
-        );
-
-        let available_bar_height =
-            (ui.available_height() - widget_text.size().y - spacing).max(0.0);
-        let width = self.bar_width.max(widget_text.size().x);
-
-        let relative_bar_position = egui::pos2((width - self.bar_width) / 2.0, 0.0);
-
-        let bar_height = self
-            .max_bar_height
-            .map(|it| it.min(available_bar_height))
-            .unwrap_or(available_bar_height)
-            .max(256.0);
-
-        let bar_extent = egui::Rect::from_min_size(
-            relative_bar_position,
-            egui::vec2(self.bar_width, bar_height),
-        );
-
-        let relative_text_position =
-            egui::pos2((width - widget_text.size().x) / 2.0, bar_height + spacing);
-        let relative_text_extent =
-            egui::Rect::from_min_size(relative_text_position, widget_text.size());
-
-        let combined_rect = bar_extent.union(relative_text_extent);
-        let (rect, response) = ui.allocate_exact_size(combined_rect.size(), egui::Sense::hover());
-
-        let bar_rect = bar_extent.translate(rect.min.to_vec2());
-
-        draw_info_in(
-            bar_rect,
-            ui.painter(),
-            self.info,
-            ui.style().visuals.extreme_bg_color,
-            ui.style().visuals.selection.bg_fill,
-        );
-
-        widget_text.paint_with_visuals(
-            ui.painter(),
-            rect.min + relative_text_position.to_vec2(),
-            ui.visuals().noninteractive(),
-        );
 
         response
     }
