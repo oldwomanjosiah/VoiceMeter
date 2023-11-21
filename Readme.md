@@ -2,4 +2,4 @@
 
 Monitor audio input devices on Windows
 
-#![example](./images/voicemeter.gif)
+![example](./images/voicemeter.gif)
