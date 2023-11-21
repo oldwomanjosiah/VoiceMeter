@@ -11,25 +11,33 @@ struct ChannelAnalysis<S: StreamTrait> {
     pub buffer_duration: Duration,
     pub smooth_duration: Duration,
     pub decay_rate: f32,
-    max_decay: Vec<i32>
+    max_decay: Vec<i32>,
 }
 
 struct BarInfo {
     jagged: f32,
     smooth: f32,
-    decaying: f32
+    decaying: f32,
 }
 
 impl<S: StreamTrait> ChannelAnalysis<S> {
     pub fn new(mut connection: ChannelConnection<S, i32>) -> Self {
-        let max_decay = std::iter::repeat(0).take(connection.channels().len()).collect();
-        Self { connection, buffer_duration: Duration::from_secs(3), smooth_duration: Duration::from_millis(50), decay_rate: 0.4, max_decay  }
+        let max_decay = std::iter::repeat(0)
+            .take(connection.channels().len())
+            .collect();
+        Self {
+            connection,
+            buffer_duration: Duration::from_secs(3),
+            smooth_duration: Duration::from_millis(150),
+            decay_rate: 0.4,
+            max_decay,
+        }
     }
 
     pub fn process(&mut self, dt: Duration) {
         self.connection.process();
 
-        let decay_factor = self.decay_rate.powf(dt.as_secs_f32());
+        let decay_factor = self.decay_rate.powf(dt.as_secs_f32() / 2.0);
 
         for decaying in &mut self.max_decay {
             *decaying = ((*decaying as f32) * decay_factor).floor() as _;
@@ -47,7 +55,8 @@ impl<S: StreamTrait> ChannelAnalysis<S> {
             let smooth_raw = {
                 let iter = channel.backbuffer();
                 let len = iter.len();
-                iter.skip(len.saturating_sub(channel.samples_for_duration(self.smooth_duration))).fold(0, combine)
+                iter.skip(len.saturating_sub(channel.samples_for_duration(self.smooth_duration)))
+                    .fold(0, combine)
             };
 
             let decaying_raw = jagged_raw.max(self.max_decay[idx]);
@@ -115,6 +124,109 @@ impl<H: cpal::traits::HostTrait> App<H, HostInputStream<H>> {
     }
 }
 
+struct HorizontalBarWidget {
+    info: BarInfo,
+    label: Option<egui::WidgetText>,
+
+    height: f32,
+    desired_width: Option<f32>,
+}
+
+impl HorizontalBarWidget {
+    pub fn new(info: BarInfo) -> Self {
+        Self {
+            info,
+            label: None,
+            height: 32.0,
+            desired_width: None,
+        }
+    }
+
+    pub fn with_label(self, text: impl Into<egui::WidgetText>) -> Self {
+        Self {
+            label: Some(text.into()),
+            ..self
+        }
+    }
+
+    pub fn with_height(self, height: f32) -> Self {
+        Self { height, ..self }
+    }
+
+    pub fn with_width(self, width: f32) -> Self {
+        Self {
+            desired_width: Some(width),
+            ..self
+        }
+    }
+}
+
+impl egui::Widget for HorizontalBarWidget {
+    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+        let max_text_with = self
+            .desired_width
+            .unwrap_or(ui.available_size_before_wrap().x)
+            - (ui.spacing().item_spacing.x * 2.0);
+        let text_layout = self
+            .label
+            .map(|it| it.into_galley(ui, Some(false), max_text_with, egui::TextStyle::Button));
+
+        let size = egui::vec2(
+            self.desired_width
+                .unwrap_or_else(|| ui.available_width().max(256.0)),
+            self.height,
+        );
+
+        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
+
+        {
+            let painter = ui.painter().with_clip_rect(rect);
+            let bg = ui.style().visuals.faint_bg_color;
+            let fill = ui.style().visuals.selection.bg_fill;
+
+            // Background
+            painter.rect_filled(rect, 0.0, bg);
+
+            // Main Bar
+            let (main_bar_rect, _) = rect.split_left_right_at_fraction(self.info.smooth);
+            painter.rect_filled(main_bar_rect, 0.0, fill);
+
+            // Jagged Display
+            let jagged_fill = fill.gamma_multiply(0.4).to_opaque();
+            let jagged_rect = {
+                let top_pt = rect
+                    .split_left_right_at_fraction(self.info.jagged)
+                    .0
+                    .right_top();
+                let bottom_pt = main_bar_rect.right_bottom();
+                egui::Rect::from_points(&[top_pt, bottom_pt])
+            };
+
+            painter.rect_filled(jagged_rect, 0.0, jagged_fill); //egui::Color32::RED);
+
+            let (decay_rect, _) = rect.split_left_right_at_fraction(self.info.decaying);
+            painter.line_segment(
+                [decay_rect.right_top(), decay_rect.right_bottom()],
+                (2.0, fill),
+            );
+        }
+
+        if let Some(galley) = text_layout {
+            let size = galley.size();
+            galley.paint_with_visuals(
+                ui.painter(),
+                egui::pos2(
+                    rect.min.x + ui.spacing().item_spacing.x,
+                    rect.min.y + (rect.size().y - size.y) / 2.0,
+                ),
+                ui.visuals().noninteractive(),
+            );
+        }
+
+        response
+    }
+}
+
 struct BarInfoWidget {
     info: BarInfo,
     name: egui::WidgetText,
@@ -125,11 +237,19 @@ struct BarInfoWidget {
 
 impl BarInfoWidget {
     pub fn new(info: BarInfo, name: impl Into<egui::WidgetText>) -> Self {
-        BarInfoWidget { info, name: name.into(), bar_width: 32.0, max_bar_height: None }
+        BarInfoWidget {
+            info,
+            name: name.into(),
+            bar_width: 32.0,
+            max_bar_height: None,
+        }
     }
 
     pub fn with_height(self, height: f32) -> Self {
-        Self { max_bar_height: Some(height), ..self }
+        Self {
+            max_bar_height: Some(height),
+            ..self
+        }
     }
 }
 
@@ -151,23 +271,41 @@ impl egui::Widget for BarInfoWidget {
 
             painter.rect_filled(smoothed, 0.0, bar_fill);
             painter.line_segment([decay.left_top(), decay.right_top()], (2.0, bar_fill));
-            painter.line_segment([jagged.left_top(), jagged.right_top()], (2.0, egui::Color32::RED));
+            painter.line_segment(
+                [jagged.left_top(), jagged.right_top()],
+                (2.0, egui::Color32::RED),
+            );
         }
 
         let spacing = ui.spacing().item_spacing.y;
-        let widget_text = self.name.into_galley(ui, Some(false), ui.available_width(), egui::TextStyle::Button);
+        let widget_text = self.name.into_galley(
+            ui,
+            Some(false),
+            ui.available_width(),
+            egui::TextStyle::Button,
+        );
 
-        let available_bar_height = (ui.available_height() - widget_text.size().y - spacing).max(0.0);
+        let available_bar_height =
+            (ui.available_height() - widget_text.size().y - spacing).max(0.0);
         let width = self.bar_width.max(widget_text.size().x);
 
         let relative_bar_position = egui::pos2((width - self.bar_width) / 2.0, 0.0);
 
-        let bar_height = self.max_bar_height.map(|it| it.min(available_bar_height)).unwrap_or(available_bar_height).max(256.0);
+        let bar_height = self
+            .max_bar_height
+            .map(|it| it.min(available_bar_height))
+            .unwrap_or(available_bar_height)
+            .max(256.0);
 
-        let bar_extent = egui::Rect::from_min_size(relative_bar_position, egui::vec2(self.bar_width, bar_height));
+        let bar_extent = egui::Rect::from_min_size(
+            relative_bar_position,
+            egui::vec2(self.bar_width, bar_height),
+        );
 
-        let relative_text_position = egui::pos2((width - widget_text.size().x) / 2.0, bar_height + spacing);
-        let relative_text_extent = egui::Rect::from_min_size(relative_text_position, widget_text.size());
+        let relative_text_position =
+            egui::pos2((width - widget_text.size().x) / 2.0, bar_height + spacing);
+        let relative_text_extent =
+            egui::Rect::from_min_size(relative_text_position, widget_text.size());
 
         let combined_rect = bar_extent.union(relative_text_extent);
         let (rect, response) = ui.allocate_exact_size(combined_rect.size(), egui::Sense::hover());
@@ -182,7 +320,11 @@ impl egui::Widget for BarInfoWidget {
             ui.style().visuals.selection.bg_fill,
         );
 
-        widget_text.paint_with_visuals(ui.painter(), rect.min + relative_text_position.to_vec2(), ui.visuals().noninteractive());
+        widget_text.paint_with_visuals(
+            ui.painter(),
+            rect.min + relative_text_position.to_vec2(),
+            ui.visuals().noninteractive(),
+        );
 
         response
     }
@@ -235,10 +377,8 @@ where
                     ui.separator();
                     ui.label(connection.connection.name());
 
-                    ui.horizontal(|ui| {
-                        connection.with_bar_info(frametime, |idx, info| {
-                            ui.add(BarInfoWidget::new(info, format!("{idx}")));
-                        });
+                    connection.with_bar_info(frametime, |idx, info| {
+                        ui.add(HorizontalBarWidget::new(info).with_label(format!("{idx}")));
                     });
                 }
             });
