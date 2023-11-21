@@ -6,6 +6,14 @@ use eyre::{Context, Report, Result};
 
 mod connection;
 
+fn log_timing<R>(name: &str, block: impl FnOnce() -> R) -> R {
+    let start = std::time::Instant::now();
+
+    let res = block();
+    tracing::info!("{name} took {}ms", start.elapsed().as_millis());
+    res
+}
+
 struct ChannelAnalysis<S: StreamTrait> {
     pub connection: ChannelConnection<S, i32>,
     pub buffer_duration: Duration,
@@ -88,12 +96,13 @@ type HostInputStream<H> =
 
 impl<H: cpal::traits::HostTrait> App<H, HostInputStream<H>> {
     fn reload_connections(&mut self) {
+        log_timing("reloading connection", ||{
         let Some(repaint) = self.repaint.as_ref() else {
             tracing::warn!("could not get repainter");
             return;
         };
 
-        let devices = match self.host.devices() {
+        let devices = match log_timing("getting devices", || self.host.devices()) {
             Ok(devices) => devices,
             Err(e) => {
                 tracing::error!("Could not get device list! {e}");
@@ -101,8 +110,11 @@ impl<H: cpal::traits::HostTrait> App<H, HostInputStream<H>> {
             }
         };
 
+        log_timing("clearing devices", || {
         self.devices.clear();
+        });
 
+        log_timing("building devices", || {
         for device in devices {
             let repaint = {
                 let parent = repaint.clone();
@@ -121,6 +133,8 @@ impl<H: cpal::traits::HostTrait> App<H, HostInputStream<H>> {
                 }
             }
         }
+        });
+        });
     }
 }
 
@@ -320,9 +334,10 @@ fn main() -> Result<()> {
         options,
         Box::new(|_| {
             let app = App::new(
+                log_timing("getting host", ||
                 cpal::host_from_id(cpal::HostId::Wasapi)
                     .wrap_err("getting host to initalize")
-                    .unwrap(),
+                    .unwrap()),
             );
             Box::new(app)
         }),
