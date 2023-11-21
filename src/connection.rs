@@ -166,15 +166,13 @@ pub mod buffer {
 
     #[cfg(test)]
     mod tests {
-        use std::hash::BuildHasher;
-
         use cpal::SampleRate;
 
         use super::*;
 
         #[test]
         fn constructable() {
-            let buffer = SampleBuffer::<i32>::new(SampleRate(1));
+            SampleBuffer::<i32>::new(SampleRate(1));
         }
 
         #[test]
@@ -204,6 +202,7 @@ type Rx<Sample> = thingbuf::mpsc::blocking::Receiver<
 >;
 type SampleIter<'l, S> = dyn ExactSizeIterator<Item = S> + 'l;
 
+/// Build an input stream, converting it's native sample type to the caller's preferred sample type for their callbacks.
 fn build_input_stream_converting<Device, Sample>(
     device: &Device,
     config: &cpal::StreamConfig,
@@ -258,6 +257,8 @@ where
 
     use cpal::SampleFormat as SF;
 
+    // Unfortunately we need to switch on the stream's preferred type here
+    // (value -> type conversion) so there is nice shorthand except gross macro work.
     match format {
         SF::I8 => device.build_input_stream::<i8, _, _>(
             config,
@@ -457,6 +458,7 @@ impl<S, I> ChannelConnection<S, I> {
 
 macro_rules! def_all_convert {
     ($($ty:ty),+ $(,)?) => {
+        /// Sample types which may be converted to any other sample type.
         pub trait AllConvertable:
             $(::cpal::FromSample<$ty> +)* std::any::Any {}
 
