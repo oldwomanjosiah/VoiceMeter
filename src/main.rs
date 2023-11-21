@@ -114,6 +114,79 @@ impl<H: cpal::traits::HostTrait> App<H, HostInputStream<H>> {
     }
 }
 
+struct BarInfoWidget {
+    info: BarInfo,
+    name: egui::WidgetText,
+
+    bar_width: f32,
+    max_bar_height: Option<f32>,
+}
+
+impl BarInfoWidget {
+    pub fn new(info: BarInfo, name: impl Into<egui::WidgetText>) -> Self {
+        BarInfoWidget { info, name: name.into(), bar_width: 32.0, max_bar_height: None }
+    }
+
+    pub fn with_height(self, height: f32) -> Self {
+        Self { max_bar_height: Some(height), ..self }
+    }
+}
+
+impl egui::Widget for BarInfoWidget {
+    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+        fn draw_info_in(
+            rect: egui::Rect,
+            painter: &egui::Painter,
+            info: BarInfo,
+            box_fill: egui::Color32,
+            bar_fill: egui::Color32,
+        ) {
+            painter.rect_filled(rect, 0.0, box_fill);
+            painter.rect_filled(rect, 0.0, box_fill);
+
+            let (_, jagged) = rect.split_top_bottom_at_fraction(1.0 - info.jagged);
+            let (_, smoothed) = rect.split_top_bottom_at_fraction(1.0 - info.smooth);
+            let (_, decay) = rect.split_top_bottom_at_fraction(1.0 - info.decaying);
+
+            painter.rect_filled(smoothed, 0.0, bar_fill);
+            painter.line_segment([decay.left_top(), decay.right_top()], (2.0, bar_fill));
+            painter.line_segment([jagged.left_top(), jagged.right_top()], (2.0, egui::Color32::RED));
+        }
+
+        let spacing = ui.spacing().item_spacing.y;
+        let widget_text = self.name.into_galley(ui, Some(false), ui.available_width(), egui::TextStyle::Button);
+
+        let available_bar_height = (ui.available_height() - widget_text.size().y - spacing).max(0.0);
+        let width = self.bar_width.max(widget_text.size().x);
+
+        let relative_bar_position = egui::pos2((width - self.bar_width) / 2.0, 0.0);
+
+        let bar_height = self.max_bar_height.map(|it| it.min(available_bar_height)).unwrap_or(available_bar_height).max(256.0);
+
+        let bar_extent = egui::Rect::from_min_size(relative_bar_position, egui::vec2(self.bar_width, bar_height));
+
+        let relative_text_position = egui::pos2((width - widget_text.size().x) / 2.0, bar_height + spacing);
+        let relative_text_extent = egui::Rect::from_min_size(relative_text_position, widget_text.size());
+
+        let combined_rect = bar_extent.union(relative_text_extent);
+        let (rect, response) = ui.allocate_exact_size(combined_rect.size(), egui::Sense::hover());
+
+        let bar_rect = bar_extent.translate(rect.min.to_vec2());
+
+        draw_info_in(
+            bar_rect,
+            ui.painter(),
+            self.info,
+            ui.style().visuals.extreme_bg_color,
+            ui.style().visuals.selection.bg_fill,
+        );
+
+        widget_text.paint_with_visuals(ui.painter(), rect.min + relative_text_position.to_vec2(), ui.visuals().noninteractive());
+
+        response
+    }
+}
+
 impl<H, S> App<H, S> {
     fn new(host: H) -> Self {
         App {
@@ -154,31 +227,37 @@ where
                 self.reload_connections();
             }
 
-            for connection in &mut self.devices {
-                connection.process(frametime);
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                for connection in &mut self.devices {
+                    connection.process(frametime);
 
-                ui.separator();
-                ui.heading(connection.connection.name());
+                    ui.separator();
+                    ui.label(connection.connection.name());
 
-                connection.with_bar_info(frametime, |idx, info| {
-                    ui.add(
-                        egui::ProgressBar::new(info.jagged)
-                            .text(format!("Channel {}", idx + 1)),
-                    );
-                    ui.add(egui::ProgressBar::new(info.smooth));
-                    ui.add(egui::ProgressBar::new(info.decaying));
+                    ui.horizontal(|ui| {
+                        connection.with_bar_info(frametime, |idx, info| {
+                            // ui.add(
+                            //     egui::ProgressBar::new(info.jagged)
+                            //         .text(format!("Channel {}", idx + 1)),
+                            // );
+                            // ui.add(egui::ProgressBar::new(info.smooth));
+                            // ui.add(egui::ProgressBar::new(info.decaying));
 
-                    // ui.label(format!(
-                    //     "Buffered: back {}ms {}samples / forward {}ms {}samples",
-                    //     channel.backbuffer_duration().as_millis(),
-                    //     channel.backbuffer_len(),
-                    //     channel.buffer_duration().as_millis(),
-                    //     channel.buffer_len()
-                    // ));
+                            ui.add(BarInfoWidget::new(info, format!("{idx}")));
 
-                    ui.add_space(24.0);
-                });
-            }
+                            // ui.label(format!(
+                            //     "Buffered: back {}ms {}samples / forward {}ms {}samples",
+                            //     channel.backbuffer_duration().as_millis(),
+                            //     channel.backbuffer_len(),
+                            //     channel.buffer_duration().as_millis(),
+                            //     channel.buffer_len()
+                            // ));
+
+                            // ui.add_space(24.0);
+                        });
+                    });
+                }
+            });
         });
     }
 }
