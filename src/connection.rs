@@ -255,86 +255,50 @@ where
         }
     }
 
-    use cpal::SampleFormat as SF;
+    
+    /// Build the callbacks for converting between types
+    macro_rules! format_switch {
+        (build_input_stream($format:ident, $device:ident, $config:ident, $data_builder:expr, $error_callback:ident, $timeout:ident) forall { $($f:ident => $ty:ty),+ $(,)? } fallback |$cap:ident| $with:expr) => {
+            match $format {
+                $(
+                    ::cpal::SampleFormat::$f => ::cpal::traits::DeviceTrait::build_input_stream::<$ty, _, _>(
+                        $device,
+                        $config,
+                        $data_builder,
+                        $error_callback,
+                        $timeout
+                    ),
+                )*
 
-    // Unfortunately we need to switch on the stream's preferred type here
-    // (value -> type conversion) so there is nice shorthand except gross macro work.
-    match format {
-        SF::I8 => device.build_input_stream::<i8, _, _>(
+                $cap => $with
+            }
+        };
+    }
+
+    format_switch!(
+        build_input_stream(
+            format,
+            device,
             config,
             build_callback(data_callback),
             error_callback,
-            timeout,
-        ),
-
-        SF::I16 => device.build_input_stream::<i16, _, _>(
-            config,
-            build_callback(data_callback),
-            error_callback,
-            timeout,
-        ),
-
-        SF::I32 => device.build_input_stream::<i32, _, _>(
-            config,
-            build_callback(data_callback),
-            error_callback,
-            timeout,
-        ),
-
-        SF::I64 => device.build_input_stream::<i64, _, _>(
-            config,
-            build_callback(data_callback),
-            error_callback,
-            timeout,
-        ),
-
-        SF::U8 => device.build_input_stream::<u8, _, _>(
-            config,
-            build_callback(data_callback),
-            error_callback,
-            timeout,
-        ),
-
-        SF::U16 => device.build_input_stream::<u16, _, _>(
-            config,
-            build_callback(data_callback),
-            error_callback,
-            timeout,
-        ),
-
-        SF::U32 => device.build_input_stream::<u32, _, _>(
-            config,
-            build_callback(data_callback),
-            error_callback,
-            timeout,
-        ),
-
-        SF::U64 => device.build_input_stream::<u64, _, _>(
-            config,
-            build_callback(data_callback),
-            error_callback,
-            timeout,
-        ),
-
-        SF::F32 => device.build_input_stream::<f32, _, _>(
-            config,
-            build_callback(data_callback),
-            error_callback,
-            timeout,
-        ),
-
-        SF::F64 => device.build_input_stream::<f64, _, _>(
-            config,
-            build_callback(data_callback),
-            error_callback,
-            timeout,
-        ),
-
-        it => {
+            timeout
+        ) forall {
+            I8 => i8,
+            I16 => i16,
+            I32 => i32,
+            I64 => i64,
+            U8 => u8,
+            U16 => u16,
+            U32 => u32,
+            U64 => u64,
+            F32 => f32,
+            F64 => f64,
+        } fallback |it| {
             tracing::warn!("Stream format {it:?} is not known");
             Err(cpal::BuildStreamError::StreamConfigNotSupported)
         }
-    }
+    )
 }
 
 pub struct ChannelConnection<S: StreamTrait, I> {
@@ -377,6 +341,8 @@ where
                 default_sample_count: 1,
             },
         );
+
+        tracing::info!("Building stream for {name}");
 
         let stream = build_input_stream_converting::<_, I>(
             device,
