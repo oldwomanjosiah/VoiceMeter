@@ -102,7 +102,7 @@ where
                     let max = channel
                         .take_duration(frametime)
                         .fold(0, |acc, it| acc.max(it.abs()));
-                    channel.trim_backbuffer_duration(Duration::from_millis(750));
+                    channel.trim_backbuffer_duration(Duration::from_millis(500));
                     let buffer_max = channel.backbuffer().fold(0, |acc, it| acc.max(it.abs()));
 
                     ui.add(
