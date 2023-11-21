@@ -8,8 +8,7 @@ mod connection;
 struct App<H, S, I> {
     host: H,
     repaint: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
-    devices: Vec<MeteredConnection<S, I>>,
-    error_log: Vec<eyre::Report>,
+    devices: Vec<ChannelConnection<S, I>>,
 }
 
 type HostInputStream<H> =
@@ -25,9 +24,7 @@ impl<H: cpal::traits::HostTrait> App<H, HostInputStream<H>, i32> {
         let devices = match self.host.devices() {
             Ok(devices) => devices,
             Err(e) => {
-                tracing::warn!("could not get devices");
-                self.error_log
-                    .push(Report::new(e).wrap_err("Getting new device list"));
+                tracing::error!("Could not get device list! {e}");
                 return;
             }
         };
@@ -40,14 +37,17 @@ impl<H: cpal::traits::HostTrait> App<H, HostInputStream<H>, i32> {
                 move || parent()
             };
 
-            match connection::MeteredConnection::new(device, repaint) {
-                Ok(conn) => {
+            match connection::ChannelConnection::build_connection(&device, repaint, true) {
+                Ok(mut conn) => {
+                    if let Err(e) = conn.play() {
+                        tracing::warn!("Could not start playing stream: {e}");
+                    }
                     self.devices.push(conn);
                 }
                 Err(e) => {
-                    self.error_log.push(e.wrap_err("setting up connection"));
+                    tracing::error!("Could not build device! Got {e}");
                 }
-            };
+            }
         }
     }
 }
@@ -58,7 +58,6 @@ impl<H, S, I> App<H, S, I> {
             host,
             repaint: None,
             devices: Default::default(),
-            error_log: Default::default(),
         }
     }
 
@@ -93,38 +92,36 @@ where
                 self.reload_connections();
             }
 
-            self.devices.retain_mut(|connection| {
-                let mut keep = true;
-
-                println!("Name: {}", connection.name());
+            for connection in &mut self.devices {
                 connection.process();
 
                 ui.separator();
-
                 ui.heading(connection.name());
 
-                let channels = connection.channels_for_frame(frametime);
+                for (idx, channel) in connection.channels().iter_mut().enumerate() {
+                    let max = channel
+                        .take_duration(frametime)
+                        .fold(0, |acc, it| acc.max(it.abs()));
+                    channel.trim_backbuffer_duration(Duration::from_millis(750));
+                    let buffer_max = channel.backbuffer().fold(0, |acc, it| acc.max(it.abs()));
 
-                for i in 0..channels.channels() {
-                    let channel_max = channels.channel_iter(i).fold(0, |acc, it| acc.max(it.saturating_abs()));
-                    let max_frac = channel_max as f32 / i32::MAX as f32;
+                    ui.add(
+                        egui::ProgressBar::new(max as f32 / i32::MAX as f32)
+                            .text(format!("Channel {}", idx + 1)),
+                    );
+                    ui.add(egui::ProgressBar::new(buffer_max as f32 / i32::MAX as f32));
 
-                    ui.add(egui::ProgressBar::new(max_frac).text(format!("Channel: {}", i + 1)));
+                    ui.label(format!(
+                        "Buffered: back {}ms {}samples / forward {}ms {}samples",
+                        channel.backbuffer_duration().as_millis(),
+                        channel.backbuffer_len(),
+                        channel.buffer_duration().as_millis(),
+                        channel.buffer_len()
+                    ));
+
+                    ui.add_space(24.0);
                 }
-
-                drop(channels);
-
-                ui.label(format!(
-                    "Buffered: {}ms",
-                    connection.buffered_time().as_millis()
-                ));
-
-                if ui.button("remove").clicked() {
-                    keep = false;
-                }
-
-                keep
-            });
+            }
         });
     }
 }
