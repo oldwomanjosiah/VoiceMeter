@@ -96,44 +96,44 @@ type HostInputStream<H> =
 
 impl<H: cpal::traits::HostTrait> App<H, HostInputStream<H>> {
     fn reload_connections(&mut self) {
-        log_timing("reloading connection", ||{
-        let Some(repaint) = self.repaint.as_ref() else {
-            tracing::warn!("could not get repainter");
-            return;
-        };
-
-        let devices = match log_timing("getting devices", || self.host.devices()) {
-            Ok(devices) => devices,
-            Err(e) => {
-                tracing::error!("Could not get device list! {e}");
+        log_timing("reloading connection", || {
+            let Some(repaint) = self.repaint.as_ref() else {
+                tracing::warn!("could not get repainter");
                 return;
-            }
-        };
-
-        log_timing("clearing devices", || {
-        self.devices.clear();
-        });
-
-        log_timing("building devices", || {
-        for device in devices {
-            let repaint = {
-                let parent = repaint.clone();
-                move || parent()
             };
 
-            match connection::ChannelConnection::build_connection(&device, repaint, true) {
-                Ok(mut conn) => {
-                    if let Err(e) = conn.play() {
-                        tracing::warn!("Could not start playing stream: {e}");
-                    }
-                    self.devices.push(ChannelAnalysis::new(conn));
-                }
+            let devices = match log_timing("getting devices", || self.host.devices()) {
+                Ok(devices) => devices,
                 Err(e) => {
-                    tracing::error!("Could not build device! Got {e}");
+                    tracing::error!("Could not get device list! {e}");
+                    return;
                 }
-            }
-        }
-        });
+            };
+
+            log_timing("clearing devices", || {
+                self.devices.clear();
+            });
+
+            log_timing("building devices", || {
+                for device in devices {
+                    let repaint = {
+                        let parent = repaint.clone();
+                        move || parent()
+                    };
+
+                    match connection::ChannelConnection::build_connection(&device, repaint, true) {
+                        Ok(mut conn) => {
+                            if let Err(e) = conn.play() {
+                                tracing::warn!("Could not start playing stream: {e}");
+                            }
+                            self.devices.push(ChannelAnalysis::new(conn));
+                        }
+                        Err(e) => {
+                            tracing::error!("Could not build device! Got {e}");
+                        }
+                    }
+                }
+            });
         });
     }
 }
@@ -182,7 +182,13 @@ impl HorizontalBarWidget {
     }
 
     fn select_color(&self, progress: f32, default: egui::Color32) -> egui::Color32 {
-        if progress > self.error.0 { self.error.1 } else if progress > self.warn.0 { self.warn.1 } else { default }
+        if progress > self.error.0 {
+            self.error.1
+        } else if progress > self.warn.0 {
+            self.warn.1
+        } else {
+            default
+        }
     }
 }
 
@@ -333,12 +339,11 @@ fn main() -> Result<()> {
         "VoiceMeter",
         options,
         Box::new(|_| {
-            let app = App::new(
-                log_timing("getting host", ||
+            let app = App::new(log_timing("getting host", || {
                 cpal::host_from_id(cpal::HostId::Wasapi)
                     .wrap_err("getting host to initalize")
-                    .unwrap()),
-            );
+                    .unwrap()
+            }));
             Box::new(app)
         }),
     )

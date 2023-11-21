@@ -9,8 +9,8 @@ use std::{
 };
 
 use cpal::{
-    traits::{DeviceTrait, StreamTrait}, BuildStreamError, FromSample, InputCallbackInfo, Sample, StreamConfig,
-    StreamError,
+    traits::{DeviceTrait, StreamTrait},
+    BuildStreamError, FromSample, InputCallbackInfo, Sample, StreamConfig, StreamError,
 };
 
 use eyre::{Context, Result};
@@ -28,7 +28,7 @@ pub mod channels {
     impl<Sample> ChannelInfo<Sample> {
         pub fn extend_from_interleaved(
             &mut self,
-            interleaved: impl ExactSizeIterator<Item = Sample>
+            interleaved: impl ExactSizeIterator<Item = Sample>,
         ) {
             let channels = self.channels.len();
             let samples = interleaved.len() / channels;
@@ -189,7 +189,10 @@ pub mod buffer {
             assert_eq!(buffer.backbuffer().copied().collect::<Vec<_>>(), &data);
 
             buffer.trim_backbuffer(16);
-            assert_eq!(buffer.backbuffer().copied().collect::<Vec<_>>(), &data[16..32]);
+            assert_eq!(
+                buffer.backbuffer().copied().collect::<Vec<_>>(),
+                &data[16..32]
+            );
         }
     }
 }
@@ -218,7 +221,11 @@ where
     fn build_callback<InType: Copy, Sample: FromSample<InType>>(
         mut data_callback: impl FnMut(&mut SampleIter<'_, Sample>, &cpal::InputCallbackInfo),
     ) -> impl FnMut(&[InType], &cpal::InputCallbackInfo) {
-        tracing::info!("Wrapping callback for sample type {} in converter from type {}", std::any::type_name::<Sample>(), std::any::type_name::<InType>());
+        tracing::info!(
+            "Wrapping callback for sample type {} in converter from type {}",
+            std::any::type_name::<Sample>(),
+            std::any::type_name::<InType>()
+        );
 
         struct Iterator<'d, I, O> {
             inner: &'d [I],
@@ -255,7 +262,6 @@ where
         }
     }
 
-    
     /// Build the callbacks for converting between types
     macro_rules! format_switch {
         (build_input_stream($format:ident, $device:ident, $config:ident, $data_builder:expr, $error_callback:ident, $timeout:ident) forall { $($f:ident => $ty:ty),+ $(,)? } fallback |$cap:ident| $with:expr) => {
@@ -318,7 +324,7 @@ where
     pub fn build_connection<D, DC>(device: &D, on_new_data: DC, span: bool) -> Result<Self>
     where
         D: cpal::traits::DeviceTrait<Stream = S>,
-        DC: Fn() + Send + 'static
+        DC: Fn() + Send + 'static,
     {
         let supported_config = device.default_input_config()?;
         let config = supported_config.config();
@@ -416,7 +422,9 @@ impl<S: StreamTrait, I> ChannelConnection<S, I> {
         &mut self.buffers
     }
 
-    pub fn name(&self) -> &str { self.name.as_ref() }
+    pub fn name(&self) -> &str {
+        self.name.as_ref()
+    }
 }
 
 impl<S: StreamTrait, I> Drop for ChannelConnection<S, I> {
