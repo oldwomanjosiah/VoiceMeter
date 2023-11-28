@@ -321,6 +321,7 @@ pub struct ChannelConnection<S: StreamTrait, I> {
     stream: S,
 
     name: Cow<'static, str>,
+    span: Option<Arc<tracing::Span>>,
     config: StreamConfig,
 
     ingest: Rx<I>,
@@ -380,9 +381,12 @@ where
                     }
                 }
             },
-            move |error| {
-                let _guard = span.as_ref().map(|it| it.enter());
-                tracing::error!(%error, "Got Stream Error");
+            {
+                let span = span.clone();
+                move |error| {
+                    let _guard = span.as_ref().map(|it| it.enter());
+                    tracing::error!(%error, "Got Stream Error");
+                }
             },
             None,
         )?;
@@ -397,6 +401,7 @@ where
             config,
             ingest: rx,
             buffers,
+            span,
         })
     }
 }
@@ -439,8 +444,9 @@ impl<S: StreamTrait, I> ChannelConnection<S, I> {
 
 impl<S: StreamTrait, I> Drop for ChannelConnection<S, I> {
     fn drop(&mut self) {
-        if let Err(e) = self.pause() {
-            tracing::warn!("Failed to pause stream while dropping: {e}");
+        if let Err(e) = self.stream.pause() {
+            let _guard = self.span.as_ref().map(|it| it.enter());
+            tracing::error!("Could not close stream due to {e}");
         }
     }
 }
