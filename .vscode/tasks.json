@@ -1,0 +1,22 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "command": "cargo",
+            "args": [
+                "run"
+            ],
+            "label": "Run",
+            "options": {
+                "env": {
+                    "RUST_LOG": "voicemeter=debug"
+                }
+            },
+            "problemMatcher": [],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        }
+    ]
+}
