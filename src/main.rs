@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use connection::*;
+use connection::{buffer::SampleBuffer, *};
 use cpal::traits::StreamTrait;
 use eyre::{Context, Report, Result};
 
@@ -14,6 +14,8 @@ fn log_timing<R>(name: &str, block: impl FnOnce() -> R) -> R {
     res
 }
 
+type FftNum = rustfft::num_complex::Complex32;
+
 struct ChannelAnalysis<S: StreamTrait> {
     pub connection: ChannelConnection<S, i32>,
     pub buffer_duration: Duration,
@@ -22,10 +24,12 @@ struct ChannelAnalysis<S: StreamTrait> {
     max_decay: Vec<i32>,
 }
 
-struct BarInfo {
-    jagged: f32,
-    smooth: f32,
-    decaying: f32,
+#[derive(Debug, Clone, Copy)]
+struct BarInfo<'o> {
+    pub from: &'o SampleBuffer<i32>,
+    pub jagged: f32,
+    pub smooth: f32,
+    pub decaying: f32,
 }
 
 impl<S: StreamTrait> ChannelAnalysis<S> {
@@ -33,6 +37,7 @@ impl<S: StreamTrait> ChannelAnalysis<S> {
         let max_decay = std::iter::repeat(0)
             .take(connection.channels().len())
             .collect();
+
         Self {
             connection,
             buffer_duration: Duration::from_secs(3),
@@ -75,6 +80,7 @@ impl<S: StreamTrait> ChannelAnalysis<S> {
             }
 
             let info = BarInfo {
+                from: channel,
                 jagged: convert(jagged_raw),
                 smooth: convert(smooth_raw),
                 decaying: convert(decaying_raw),
@@ -138,8 +144,8 @@ impl<H: cpal::traits::HostTrait> App<H, HostInputStream<H>> {
     }
 }
 
-struct HorizontalBarWidget {
-    info: BarInfo,
+struct HorizontalBarWidget<'o> {
+    info: BarInfo<'o>,
     label: Option<egui::WidgetText>,
 
     warn: (f32, egui::Color32),
@@ -149,8 +155,8 @@ struct HorizontalBarWidget {
     desired_width: Option<f32>,
 }
 
-impl HorizontalBarWidget {
-    pub fn new(info: BarInfo) -> Self {
+impl<'o> HorizontalBarWidget<'o> {
+    pub fn new(info: BarInfo<'o>) -> Self {
         Self {
             info,
             label: None,
@@ -192,7 +198,7 @@ impl HorizontalBarWidget {
     }
 }
 
-impl egui::Widget for HorizontalBarWidget {
+impl egui::Widget for HorizontalBarWidget<'_> {
     fn ui(self, ui: &mut egui::Ui) -> egui::Response {
         let fill = self.select_color(self.info.smooth, ui.style().visuals.selection.bg_fill);
         let decay_color = self.select_color(self.info.decaying, fill);
