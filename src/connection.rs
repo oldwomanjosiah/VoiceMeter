@@ -80,6 +80,16 @@ pub mod buffer {
         absolute_sample: usize,
     }
 
+    impl<S> std::fmt::Debug for SampleBuffer<S> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct(&format!("SampleBuffer<{}>", std::any::type_name::<S>()))
+                .field("backbuffer.len", &self.backbuffer)
+                .field("buffer.len", &(self.delegate.len() - self.backbuffer))
+                .field("absolute_sample", &self.absolute_sample)
+                .finish()
+        }
+    }
+
     impl<S> SampleBuffer<S> {
         pub fn new(sample_rate: cpal::SampleRate) -> Self {
             Self {
