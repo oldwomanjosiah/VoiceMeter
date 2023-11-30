@@ -1,8 +1,15 @@
-use std::{sync::Arc, time::Duration};
+use std::{default, sync::Arc, time::Duration};
 
 use cpal::traits::StreamTrait;
 use eyre::{Context, Report, Result};
-use voicemeter::connection::{buffer::SampleBuffer, *};
+use voicemeter::{
+    connection::{
+        buffer::SampleBuffer,
+        managed::{LoadError, LoadingDevices, ManagedConnection, Manager},
+        *,
+    },
+    ui::lce::{DynamicLce, Lce, LoadableExt},
+};
 
 fn log_timing<R>(name: &str, block: impl FnOnce() -> R) -> R {
     let start = std::time::Instant::now();
@@ -12,10 +19,8 @@ fn log_timing<R>(name: &str, block: impl FnOnce() -> R) -> R {
     res
 }
 
-type FftNum = rustfft::num_complex::Complex32;
-
-struct ChannelAnalysis<S: StreamTrait> {
-    pub connection: ChannelConnection<S, i32>,
+struct ChannelAnalysis {
+    pub connection: ManagedConnection<i32>,
     pub buffer_duration: Duration,
     pub smooth_duration: Duration,
     pub decay_rate: f32,
@@ -30,11 +35,9 @@ struct BarInfo<'o> {
     pub decaying: f32,
 }
 
-impl<S: StreamTrait> ChannelAnalysis<S> {
-    pub fn new(mut connection: ChannelConnection<S, i32>) -> Self {
-        let max_decay = std::iter::repeat(0)
-            .take(connection.channels().len())
-            .collect();
+impl ChannelAnalysis {
+    pub fn new(mut connection: ManagedConnection<i32>) -> Self {
+        let max_decay = std::iter::repeat(0).take(connection.channels()).collect();
 
         Self {
             connection,
@@ -58,7 +61,7 @@ impl<S: StreamTrait> ChannelAnalysis<S> {
     pub fn with_bar_info(&mut self, frame_time: Duration, mut thunk: impl FnMut(usize, BarInfo)) {
         let combine = |acc: i32, it: &i32| acc.max(it.saturating_abs());
 
-        for (idx, channel) in self.connection.channels().iter_mut().enumerate() {
+        for (idx, channel) in self.connection.buffers().iter_mut().enumerate() {
             let jagged_raw = channel.take_duration(frame_time).fold(0, combine);
 
             channel.trim_backbuffer_duration(self.buffer_duration);
@@ -89,93 +92,42 @@ impl<S: StreamTrait> ChannelAnalysis<S> {
     }
 }
 
-struct App<H, S: StreamTrait> {
-    host: H,
-    repaint: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
-    devices: Vec<ChannelAnalysis<S>>,
+struct App {
+    manager: Manager<i32>,
+    connections: DynamicLce<Vec<ChannelAnalysis>, LoadError>,
 }
 
 type HostInputStream<H> =
     <<H as cpal::traits::HostTrait>::Device as cpal::traits::DeviceTrait>::Stream;
 
-impl<H: cpal::traits::HostTrait> App<H, HostInputStream<H>> {
+impl App {
     fn reload_connections(&mut self) {
-        log_timing("reloading connection", || {
-            let Some(repaint) = self.repaint.as_ref() else {
-                tracing::warn!("could not get repainter");
-                return;
-            };
-
-            let devices = match log_timing("getting devices", || self.host.devices()) {
-                Ok(devices) => devices,
-                Err(e) => {
-                    tracing::error!("Could not get device list! {e}");
-                    return;
-                }
-            };
-
-            log_timing("clearing devices", || {
-                self.devices.clear();
-            });
-
-            log_timing("building devices", || {
-                for device in devices {
-                    let repaint = {
-                        let parent = repaint.clone();
-                        move || parent()
-                    };
-
-                    match voicemeter::connection::ChannelConnection::build_connection(
-                        &device, repaint, true,
-                    ) {
-                        Ok(mut conn) => {
-                            if let Err(e) = conn.play() {
-                                tracing::warn!("Could not start playing stream: {e}");
-                            }
-                            self.devices.push(ChannelAnalysis::new(conn));
-                        }
-                        Err(e) => {
-                            tracing::error!("Could not build device! Got {e}");
-                        }
-                    }
-                }
-            });
+        let loader = self.manager.load();
+        let mapped_loader = loader.map_res(|res| {
+            res.map(|connections| {
+                connections
+                    .into_iter()
+                    .map(ChannelAnalysis::new)
+                    .collect::<Vec<_>>()
+            })
         });
+
+        self.connections = Lce::Loading(mapped_loader).to_dyn_lce();
     }
 }
 
-impl<H, S: StreamTrait> App<H, S> {
-    fn new(host: H) -> Self {
+impl App {
+    fn new(manager: Manager<i32>) -> Self {
         App {
-            host,
-            repaint: None,
-            devices: Default::default(),
-        }
-    }
-
-    fn set_repaint_from(&mut self, ctx: &egui::Context) -> bool {
-        match self.repaint.as_ref() {
-            Some(_) => false,
-            None => {
-                let ctx = ctx.clone();
-                let new_repaint = Arc::new(move || ctx.request_repaint());
-                self.repaint = Some(new_repaint);
-                true
-            }
+            manager,
+            connections: Default::default(),
         }
     }
 }
 
-impl<H> eframe::App for App<H, HostInputStream<H>>
-where
-    H: cpal::traits::HostTrait,
-{
+impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let frametime = Duration::from_secs_f32(ctx.input(|it| it.unstable_dt));
-
-        if self.set_repaint_from(ctx) {
-            self.reload_connections();
-        }
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("VoiceMeter");
@@ -184,24 +136,46 @@ where
                 self.reload_connections();
             }
 
+            if matches!(self.connections, Lce::Waiting) {
+                self.reload_connections();
+            }
+
             egui::ScrollArea::vertical().show(ui, |ui| {
-                for connection in &mut self.devices {
-                    connection.process(frametime);
+                self.connections.ui(
+                    ui,
+                    |ui| {
+                        ui.heading("Waiting");
+                    },
+                    |ui, _l| {
+                        ui.horizontal(|ui| {
+                            ui.heading("Loading");
+                            ui.spinner();
+                        });
+                    },
+                    |ui, c| {
+                        for connection in c {
+                            connection.process(frametime);
 
-                    ui.separator();
-                    ui.label(connection.connection.name());
+                            ui.separator();
+                            ui.label(connection.connection.name());
 
-                    connection.with_bar_info(frametime, |idx, info| {
-                        ui.add(
-                            voicemeter::ui::horizontal_bar::HorizontalBarWidget::new(
-                                info.jagged,
-                                info.smooth,
-                                info.decaying,
-                            )
-                            .with_label(format!("{idx}")),
-                        );
-                    });
-                }
+                            connection.with_bar_info(frametime, |idx, info| {
+                                ui.add(
+                                    voicemeter::ui::horizontal_bar::HorizontalBarWidget::new(
+                                        info.jagged,
+                                        info.smooth,
+                                        info.decaying,
+                                    )
+                                    .with_label(format!("{idx}")),
+                                );
+                            });
+                        }
+                    },
+                    |ui, e| {
+                        ui.heading("Error");
+                        ui.code(e.to_string());
+                    },
+                );
             });
         });
     }
@@ -229,12 +203,23 @@ fn main() -> Result<()> {
     eframe::run_native(
         "VoiceMeter",
         options,
-        Box::new(|_| {
-            let app = App::new(log_timing("getting host", || {
-                cpal::host_from_id(cpal::HostId::Wasapi)
-                    .wrap_err("getting host to initalize")
-                    .unwrap()
-            }));
+        Box::new(|ctx| {
+            let host = cpal::host_from_id(cpal::HostId::Wasapi)
+                .wrap_err("Getting host")
+                .unwrap();
+
+            let notifier = {
+                let ctx = ctx.egui_ctx.clone();
+                let callback = move || {
+                    ctx.request_repaint();
+                };
+                Arc::new(callback)
+            };
+
+            let manager =
+                voicemeter::connection::managed::Manager::init(host, Some("Wasapi"), notifier);
+
+            let app = App::new(manager);
             Box::new(app)
         }),
     )
