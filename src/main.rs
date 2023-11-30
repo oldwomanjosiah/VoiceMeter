@@ -1,10 +1,8 @@
 use std::{sync::Arc, time::Duration};
 
-use connection::{buffer::SampleBuffer, *};
 use cpal::traits::StreamTrait;
 use eyre::{Context, Report, Result};
-
-mod connection;
+use voicemeter::connection::{buffer::SampleBuffer, *};
 
 fn log_timing<R>(name: &str, block: impl FnOnce() -> R) -> R {
     let start = std::time::Instant::now();
@@ -127,7 +125,9 @@ impl<H: cpal::traits::HostTrait> App<H, HostInputStream<H>> {
                         move || parent()
                     };
 
-                    match connection::ChannelConnection::build_connection(&device, repaint, true) {
+                    match voicemeter::connection::ChannelConnection::build_connection(
+                        &device, repaint, true,
+                    ) {
                         Ok(mut conn) => {
                             if let Err(e) = conn.play() {
                                 tracing::warn!("Could not start playing stream: {e}");
@@ -141,128 +141,6 @@ impl<H: cpal::traits::HostTrait> App<H, HostInputStream<H>> {
                 }
             });
         });
-    }
-}
-
-struct HorizontalBarWidget<'o> {
-    info: BarInfo<'o>,
-    label: Option<egui::WidgetText>,
-
-    warn: (f32, egui::Color32),
-    error: (f32, egui::Color32),
-
-    height: f32,
-    desired_width: Option<f32>,
-}
-
-impl<'o> HorizontalBarWidget<'o> {
-    pub fn new(info: BarInfo<'o>) -> Self {
-        Self {
-            info,
-            label: None,
-
-            warn: (0.75, egui::Color32::YELLOW),
-            error: (0.95, egui::Color32::RED),
-
-            height: 32.0,
-            desired_width: None,
-        }
-    }
-
-    pub fn with_label(self, text: impl Into<egui::WidgetText>) -> Self {
-        Self {
-            label: Some(text.into()),
-            ..self
-        }
-    }
-
-    pub fn with_height(self, height: f32) -> Self {
-        Self { height, ..self }
-    }
-
-    pub fn with_width(self, width: f32) -> Self {
-        Self {
-            desired_width: Some(width),
-            ..self
-        }
-    }
-
-    fn select_color(&self, progress: f32, default: egui::Color32) -> egui::Color32 {
-        if progress > self.error.0 {
-            self.error.1
-        } else if progress > self.warn.0 {
-            self.warn.1
-        } else {
-            default
-        }
-    }
-}
-
-impl egui::Widget for HorizontalBarWidget<'_> {
-    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
-        let fill = self.select_color(self.info.smooth, ui.style().visuals.selection.bg_fill);
-        let decay_color = self.select_color(self.info.decaying, fill);
-
-        let max_text_with = self
-            .desired_width
-            .unwrap_or(ui.available_size_before_wrap().x)
-            - (ui.spacing().item_spacing.x * 2.0);
-        let text_layout = self
-            .label
-            .map(|it| it.into_galley(ui, Some(false), max_text_with, egui::TextStyle::Button));
-
-        let size = egui::vec2(
-            self.desired_width
-                .unwrap_or_else(|| ui.available_width().max(256.0)),
-            self.height,
-        );
-
-        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
-
-        {
-            let painter = ui.painter().with_clip_rect(rect);
-            let bg = ui.style().visuals.faint_bg_color;
-
-            // Background
-            painter.rect_filled(rect, 0.0, bg);
-
-            // Main Bar
-            let (main_bar_rect, _) = rect.split_left_right_at_fraction(self.info.smooth);
-            painter.rect_filled(main_bar_rect, 0.0, fill);
-
-            // Jagged Display
-            let jagged_fill = fill.gamma_multiply(0.4).to_opaque();
-            let jagged_rect = {
-                let top_pt = rect
-                    .split_left_right_at_fraction(self.info.jagged)
-                    .0
-                    .right_top();
-                let bottom_pt = main_bar_rect.right_bottom();
-                egui::Rect::from_points(&[top_pt, bottom_pt])
-            };
-
-            painter.rect_filled(jagged_rect, 0.0, jagged_fill); //egui::Color32::RED);
-
-            let (decay_rect, _) = rect.split_left_right_at_fraction(self.info.decaying);
-            painter.line_segment(
-                [decay_rect.right_top(), decay_rect.right_bottom()],
-                (2.0, decay_color),
-            );
-        }
-
-        if let Some(galley) = text_layout {
-            let size = galley.size();
-            galley.paint_with_visuals(
-                ui.painter(),
-                egui::pos2(
-                    rect.min.x + ui.spacing().item_spacing.x,
-                    rect.min.y + (rect.size().y - size.y) / 2.0,
-                ),
-                ui.visuals().noninteractive(),
-            );
-        }
-
-        response
     }
 }
 
@@ -314,7 +192,14 @@ where
                     ui.label(connection.connection.name());
 
                     connection.with_bar_info(frametime, |idx, info| {
-                        ui.add(HorizontalBarWidget::new(info).with_label(format!("{idx}")));
+                        ui.add(
+                            voicemeter::ui::horizontal_bar::HorizontalBarWidget::new(
+                                info.jagged,
+                                info.smooth,
+                                info.decaying,
+                            )
+                            .with_label(format!("{idx}")),
+                        );
                     });
                 }
             });
