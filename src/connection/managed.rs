@@ -141,7 +141,7 @@ where
 
                     match dtx.try_send_ref() {
                         Ok(mut sender) => {
-                            tracing::debug!("Deinterleaving {samples} from a buffer of length {len} and sending");
+                            tracing::trace!("Deinterleaving {samples} from a buffer of length {len} and sending");
                             sender.extend_from_interleaved(interleaved);
                             notifier();
                         }
