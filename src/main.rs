@@ -1,23 +1,13 @@
-use std::{default, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
-use cpal::traits::StreamTrait;
-use eyre::{Context, Report, Result};
+use eyre::{Context, Result};
 use voicemeter::{
     connection::{
         buffer::SampleBuffer,
-        managed::{LoadError, LoadingDevices, ManagedConnection, Manager},
-        *,
+        managed::{LoadError, ManagedConnection, Manager},
     },
-    ui::lce::{DynamicLce, Lce, LoadableExt},
+    ui::{DynamicLce, Lce, LoadableExt},
 };
-
-fn log_timing<R>(name: &str, block: impl FnOnce() -> R) -> R {
-    let start = std::time::Instant::now();
-
-    let res = block();
-    tracing::info!("{name} took {}ms", start.elapsed().as_millis());
-    res
-}
 
 struct ChannelAnalysis {
     pub connection: ManagedConnection<i32>,
@@ -29,6 +19,7 @@ struct ChannelAnalysis {
 
 #[derive(Debug, Clone, Copy)]
 struct BarInfo<'o> {
+    #[allow(unused)]
     pub from: &'o SampleBuffer<i32>,
     pub jagged: f32,
     pub smooth: f32,
@@ -36,7 +27,7 @@ struct BarInfo<'o> {
 }
 
 impl ChannelAnalysis {
-    pub fn new(mut connection: ManagedConnection<i32>) -> Self {
+    pub fn new(connection: ManagedConnection<i32>) -> Self {
         let max_decay = std::iter::repeat(0).take(connection.channels()).collect();
 
         Self {
@@ -96,9 +87,6 @@ struct App {
     manager: Manager<i32>,
     connections: DynamicLce<Vec<ChannelAnalysis>, LoadError>,
 }
-
-type HostInputStream<H> =
-    <<H as cpal::traits::HostTrait>::Device as cpal::traits::DeviceTrait>::Stream;
 
 impl App {
     fn reload_connections(&mut self) {
@@ -161,7 +149,7 @@ impl eframe::App for App {
 
                             connection.with_bar_info(frametime, |idx, info| {
                                 ui.add(
-                                    voicemeter::ui::horizontal_bar::HorizontalBarWidget::new(
+                                    voicemeter::ui::HorizontalBarWidget::new(
                                         info.jagged,
                                         info.smooth,
                                         info.decaying,
@@ -217,7 +205,7 @@ fn main() -> Result<()> {
             };
 
             let manager =
-                voicemeter::connection::managed::Manager::init(host, Some("Wasapi"), notifier);
+                voicemeter::connection::managed::Manager::new(host, Some("Wasapi"), notifier);
 
             let app = App::new(manager);
             Box::new(app)
