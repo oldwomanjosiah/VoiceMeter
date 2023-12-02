@@ -1,3 +1,5 @@
+#![windows_subsystem = "windows"]
+
 use std::{sync::Arc, time::Duration};
 
 use cpal::Device;
@@ -39,7 +41,7 @@ struct BarInfo<'o> {
 
 impl ChannelAnalysisSet {
     pub fn new(from: Vec<ManagedConnection<i32>>, planner: &mut FftPlanner<f32>) -> Self {
-        let buffer_len = 2 << 11;
+        let buffer_len = 2 << 12;
         let forier = planner.plan_fft_forward(buffer_len);
 
         let forier_buffer = vec![Complex32::new(0.0, 0.0); buffer_len];
@@ -170,12 +172,11 @@ impl ChannelAnalysisSet {
         }
 
         Some(
-            Alternating::new(
-                self.forier_buffer
-                    .iter()
-                    .map(move |it| (it).scale(1.0 / scale)),
-            )
-            .enumerate(),
+            self.forier_buffer
+                .iter()
+                .map(move |it| (it).scale(1.0 / scale))
+                .take(buffer_len / 2)
+                .enumerate(),
         )
     }
 
