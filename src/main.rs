@@ -1,4 +1,4 @@
-#![windows_subsystem = "windows"]
+#![cfg_attr(profile = "release", windows_subsystem = "windows")]
 
 use std::{sync::Arc, time::Duration};
 
@@ -11,6 +11,7 @@ use voicemeter::{
         managed::{LoadError, ManagedConnection, Manager},
     },
     ui::{DynamicLce, HorizontalBarWidget, Lce, LoadableExt},
+    HzExt,
 };
 
 struct ChannelAnalysisSet {
@@ -226,6 +227,14 @@ impl ChannelAnalysisSet {
     }
 
     pub fn detail_view(&mut self, ui: &mut egui::Ui) {
+        let mut sample_rate = 0.hz();
+
+        if let Some(channel) = self.detail_channel_mut() {
+            sample_rate = channel.sample_rate();
+
+            ui.label(format!("Sample Rate: {}", sample_rate));
+        }
+
         egui_plot::Plot::new("fft_plot").show(ui, |plot| {
             plot.set_plot_bounds(egui_plot::PlotBounds::from_min_max(
                 [0.0, 0.0],
@@ -240,6 +249,7 @@ impl ChannelAnalysisSet {
 
             let points_len = points.len();
             let mut mag = Vec::with_capacity(points.len());
+            let mut max = (0, 0.0);
 
             for (idx, point) in points {
                 use egui_plot::PlotPoint;
@@ -248,8 +258,16 @@ impl ChannelAnalysisSet {
                 let x = ((idx + 1) as f64).log10();
                 // let x = idx as f32;
 
+                let norm = point.norm();
+
+                if norm > max.1 {
+                    max = (idx, norm);
+                }
+
                 mag.push(PlotPoint::new(x, point.norm()));
             }
+
+            tracing::info!("Max: {} {}", sample_rate * max.0 / points_len / 2, max.1);
 
             use egui::Color32;
             use egui_plot::Line;
@@ -436,6 +454,12 @@ fn main() -> Result<()> {
             .init();
 
         color_eyre::install()?;
+    }
+
+    if let Ok(value) = std::env::var("RUST_LOG") {
+        println!("Value: {value}");
+    } else {
+        println!("Could not get RUST_LOG var");
     }
 
     let options = eframe::NativeOptions {

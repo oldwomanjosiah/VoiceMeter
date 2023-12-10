@@ -1,5 +1,7 @@
 use std::{collections::VecDeque, time::Duration};
 
+use crate::{Hz, HzExt};
+
 pub struct SampleBuffer<Sample> {
     delegate: VecDeque<Sample>,
     sample_rate: u32,
@@ -29,6 +31,11 @@ impl<S> SampleBuffer<S> {
             backbuffer: 0,
             absolute_sample: 0,
         }
+    }
+
+    #[inline]
+    pub fn sample_rate(&self) -> Hz {
+        self.sample_rate.hz()
     }
 
     #[inline]
