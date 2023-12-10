@@ -58,6 +58,7 @@ macro_rules! hz_ext_cast {
     ($($ty:ty),+) => {
         $(
             impl HzExt for $ty {
+                #[inline(always)]
                 fn hz(self) -> Hz {
                     Hz(self as _)
                 }
@@ -66,6 +67,7 @@ macro_rules! hz_ext_cast {
             impl std::ops::Mul<$ty> for Hz {
                 type Output = Hz;
 
+                #[inline]
                 fn mul(self, rhs: $ty) -> Hz {
                     (self.0 * rhs as isize).hz()
                 }
@@ -74,6 +76,7 @@ macro_rules! hz_ext_cast {
             impl std::ops::Div<$ty> for Hz {
                 type Output = Hz;
 
+                #[inline]
                 fn div(self, rhs: $ty) -> Hz {
                     (self.0 / rhs as isize).hz()
                 }
@@ -85,6 +88,7 @@ macro_rules! hz_ext_cast {
 impl std::ops::Add for Hz {
     type Output = Hz;
 
+    #[inline]
     fn add(self, rhs: Hz) -> Self::Output {
         (self.0 + rhs.0).hz()
     }
@@ -93,6 +97,7 @@ impl std::ops::Add for Hz {
 impl std::ops::Sub for Hz {
     type Output = Hz;
 
+    #[inline]
     fn sub(self, rhs: Hz) -> Self::Output {
         (self.0 - rhs.0).hz()
     }
@@ -101,6 +106,7 @@ impl std::ops::Sub for Hz {
 impl std::ops::Div for Hz {
     type Output = f32;
 
+    #[inline]
     fn div(self, rhs: Self) -> Self::Output {
         self.0 as f32 / rhs.0 as f32
     }
