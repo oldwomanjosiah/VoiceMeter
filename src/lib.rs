@@ -228,6 +228,8 @@ pub mod fft {
                 PreprocessWindow::None => input,
             }
         }
+
+        // TODO(josiah) add in portable simd implementation, based on nightly feature added to crate
     }
 }
 
