@@ -111,20 +111,11 @@ impl ChannelAnalysisSet {
     }
 
     pub fn detail_view(&mut self, ui: &mut egui::Ui) {
-        let mut sample_rate = 0.hz();
-
-        if let Some(channel) = self.detail_channel_mut() {
-            sample_rate = channel.sample_rate();
-
-            ui.label(format!("Sample Rate: {}", sample_rate));
-        }
-
-        egui_plot::Plot::new("fft_plot").show(ui, |plot| {
-            plot.set_plot_bounds(egui_plot::PlotBounds::from_min_max(
-                [0.0, 0.0],
-                [f64::INFINITY, 1.0],
-            ));
-            plot.set_auto_bounds([true, false].into());
+        {
+            let sample_rate = self
+                .detail_channel_mut()
+                .map(|it| it.sample_rate())
+                .unwrap_or(0.hz());
 
             let Some((dev, channel)) = self.detail_view else {
                 return;
@@ -135,8 +126,27 @@ impl ChannelAnalysisSet {
                 return;
             };
 
+            let max = points
+                .max_by(|a, b| a.amplitude().total_cmp(&b.amplitude()))
+                .unwrap();
+
+            ui.label(format!("Sample Rate: {sample_rate}"));
+            if max.amplitude() > 0.15 {
+                ui.label(format!("Max Frequency: {}", max.frequency(sample_rate)));
+            } else {
+                ui.label("Max Frequency: None");
+            }
+        }
+
+        egui_plot::Plot::new("fft_plot").show(ui, |plot| {
+            plot.set_plot_bounds(egui_plot::PlotBounds::from_min_max(
+                [0.0, 0.0],
+                [f64::INFINITY, 1.0],
+            ));
+            plot.set_auto_bounds([true, false].into());
+
+            let points = self.fft.get_result().unwrap();
             let mut mag = Vec::with_capacity(points.len());
-            let mut max = (0.hz(), 0.0);
 
             for point in points {
                 use egui_plot::PlotPoint;
@@ -147,14 +157,8 @@ impl ChannelAnalysisSet {
 
                 let norm = point.amplitude();
 
-                if norm > max.1 {
-                    max = (point.frequency(buffer.sample_rate()), norm);
-                }
-
                 mag.push(PlotPoint::new(x, norm));
             }
-
-            tracing::info!("Max: {} {}", max.0, max.1);
 
             use egui::Color32;
             use egui_plot::Line;
@@ -267,15 +271,13 @@ impl App {
         App {
             manager,
             connections: Default::default(),
-            builder: fft::Fft::builder().with_size(fft::FftSize::Samples1024),
+            builder: fft::Fft::builder(), //.with_size(fft::FftSize::Samples1024),
         }
     }
 }
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let frametime = Duration::from_secs_f32(ctx.input(|it| it.unstable_dt));
-
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("VoiceMeter");
 

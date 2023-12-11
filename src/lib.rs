@@ -121,25 +121,32 @@ impl std::fmt::Display for Hz {
 
         let neg = self.0 < 0;
         let mut val = self.0.abs();
-        let mut leading = LEADING;
+        let mut lidx = 0;
 
-        while val % 1000 == 0 && leading.len() > 1 {
+        while val % 1000 == 0 && val != 0 && lidx < LEADING.len() {
             val %= 1000;
-            leading = &leading[1..];
+            lidx += 1;
         }
 
         if neg {
             f.write_char('-')?;
         }
 
-        let char = &leading[..1];
+        let char = &LEADING[lidx..=lidx];
         let div = val / 1000;
         let rem = val % 1000;
 
-        if rem == 0 {
+        if div == 0 {
+            if let Some(char_idx) = lidx.checked_sub(1) {
+                let char = &LEADING[char_idx..=char_idx];
+                f.write_fmt(format_args!("{div}.{rem:03} {char}Hz"))
+            } else {
+                f.write_fmt(format_args!("{rem} Hz"))
+            }
+        } else if rem == 0 {
             f.write_fmt(format_args!("{div} {char}Hz"))
         } else {
-            f.write_fmt(format_args!("{div}.{rem:04} {char}Hz"))
+            f.write_fmt(format_args!("{div}.{rem:03} {char}Hz"))
         }
     }
 }
